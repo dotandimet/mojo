@@ -37,6 +37,8 @@ is app->test_helper('foo'), undef, 'no value yet';
 is app->test_helper2, 'Mojolicious::Controller', 'right value';
 app->test_helper3->{foo} = 'bar';
 is app->test_helper3->{foo}, 'bar', 'right result';
+helper _ => sub { "X" . $_[1] . "X" };
+is app->_('foo'), 'XfooX', "_ helper";
 
 # Test renderer
 app->renderer->add_handler(dead => sub { die 'renderer works!' });
@@ -401,6 +403,10 @@ get '/captures/:foo/:bar' => sub {
   my $self = shift;
   $self->render(text => $self->url_for);
 };
+
+get '/localize' => 'localize';
+
+get '/evil_helper_id' => 'evil_helper_id';
 
 # Default condition
 app->routes->add_condition(
@@ -1059,6 +1065,11 @@ $t->get_ok('/dynamic/inline')->status_is(200)
 $t->get_ok('/dynamic/inline')->status_is(200)
   ->content_is("dynamic inline 2\n");
 
+$t->get_ok('/evil_helper_id')->status_is(200)
+  ->content_is(<<EOF);
+XfooX
+EOF
+
 done_testing();
 
 __DATA__
@@ -1151,6 +1162,10 @@ Not a favicon!
 %== url_with('http://mojolicio.us/test')
 %== url_with('/test')->query([foo => undef])
 %== url_with('bartest', test => 23)->query([foo => 'yada'])
+
+@@ evil_helper_id.html.ep
+%== _('foo')
+
 
 __END__
 This is not a template!

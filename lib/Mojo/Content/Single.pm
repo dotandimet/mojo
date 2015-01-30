@@ -70,7 +70,8 @@ Mojo::Content::Single - HTTP content
 =head1 DESCRIPTION
 
 L<Mojo::Content::Single> is a container for HTTP content based on
-L<RFC 2616|http://tools.ietf.org/html/rfc2616>.
+L<RFC 7230|http://tools.ietf.org/html/rfc7230> and
+L<RFC 7231|http://tools.ietf.org/html/rfc7231>.
 
 =head1 EVENTS
 
@@ -103,15 +104,15 @@ implements the following new ones.
   $single   = $single->asset(Mojo::Asset::Memory->new);
 
 The actual content, defaults to a L<Mojo::Asset::Memory> object with
-C<auto_upgrade> enabled.
+L<Mojo::Asset::Memory/"auto_upgrade"> enabled.
 
 =head2 auto_upgrade
 
-  my $upgrade = $single->auto_upgrade;
-  $single     = $single->auto_upgrade(0);
+  my $bool = $single->auto_upgrade;
+  $single  = $single->auto_upgrade($bool);
 
 Try to detect multipart content and automatically upgrade to a
-L<Mojo::Content::MultiPart> object, defaults to C<1>.
+L<Mojo::Content::MultiPart> object, defaults to a true value.
 
 =head1 METHODS
 

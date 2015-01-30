@@ -13,15 +13,14 @@ use Mojo::Util qw(spurt unindent);
 use Pod::Usage 'pod2usage';
 
 has app => sub { Mojo::Server->new->build_app('Mojo::HelloWorld') };
-has description => 'No description.';
-has quiet       => 0;
-has usage       => "Usage: APPLICATION\n";
+has description => 'No description';
+has 'quiet';
+has usage => "Usage: APPLICATION\n";
 
 sub chmod_file {
   my ($self, $path, $mod) = @_;
   chmod $mod, $path or croak qq{Can't chmod file "$path": $!};
-  $mod = sprintf '%lo', $mod;
-  say "  [chmod] $path $mod" unless $self->quiet;
+  say "  [chmod] $path " . sprintf('%lo', $mod) unless $self->quiet;
   return $self;
 }
 
@@ -54,9 +53,8 @@ sub extract_usage {
 
 sub help { print shift->usage }
 
-sub rel_dir { catdir(getcwd(), split '/', pop) }
-
-sub rel_file { catfile(getcwd(), split '/', pop) }
+sub rel_dir  { catdir getcwd(),  split('/', pop) }
+sub rel_file { catfile getcwd(), split('/', pop) }
 
 sub render_data {
   my ($self, $name) = (shift, shift);
@@ -101,14 +99,14 @@ Mojolicious::Command - Command base class
   use Mojo::Base 'Mojolicious::Command';
 
   # Short description
-  has description => 'My first Mojo command.';
+  has description => 'My first Mojo command';
 
   # Short usage message
   has usage => <<EOF;
   Usage: APPLICATION mycommand [OPTIONS]
 
   Options:
-    -s, --something   Does something.
+    -s, --something   Does something
   EOF
 
   sub run {
@@ -131,7 +129,7 @@ L<Mojolicious::Command> implements the following attributes.
 =head2 app
 
   my $app  = $command->app;
-  $command = $command->app(MyApp->new);
+  $command = $command->app(Mojolicious->new);
 
 Application for command, defaults to a L<Mojo::HelloWorld> object.
 
@@ -141,7 +139,7 @@ Application for command, defaults to a L<Mojo::HelloWorld> object.
 =head2 description
 
   my $description = $command->description;
-  $command        = $command->description('Foo!');
+  $command        = $command->description('Foo');
 
 Short description of command, used for the command list.
 
@@ -155,7 +153,7 @@ Limited command output.
 =head2 usage
 
   my $usage = $command->usage;
-  $command  = $command->usage('Foo!');
+  $command  = $command->usage('Foo');
 
 Usage information for command, used for the help screen.
 

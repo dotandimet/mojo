@@ -1,6 +1,5 @@
 package Mojo::Collection;
 use Mojo::Base -strict;
-use overload bool => sub {1}, '""' => sub { shift->join("\n") }, fallback => 1;
 
 use Carp 'croak';
 use Exporter 'import';
@@ -10,24 +9,10 @@ use Scalar::Util 'blessed';
 
 our @EXPORT_OK = ('c');
 
-sub AUTOLOAD {
-  my $self = shift;
-
-  my ($package, $method) = split /::(\w+)$/, our $AUTOLOAD;
-  croak "Undefined subroutine &${package}::$method called"
-    unless blessed $self && $self->isa(__PACKAGE__);
-
-  croak qq{Can't locate object method "$method" via package "$package"}
-    unless @$self;
-  return $self->pluck($method, @_);
-}
-
-sub DESTROY { }
-
 sub c { __PACKAGE__->new(@_) }
 
 sub compact {
-  shift->grep(sub { length($_ // '') });
+  $_[0]->new(grep { defined && (ref || length) } @{$_[0]});
 }
 
 sub each {
@@ -53,13 +38,15 @@ sub grep {
   return $self->new(grep { $_ =~ $cb } @$self);
 }
 
-sub join { Mojo::ByteStream->new(join $_[1] // '', map({"$_"} @{$_[0]})) }
+sub join {
+  Mojo::ByteStream->new(join $_[1] // '', map {"$_"} @{$_[0]});
+}
 
 sub last { shift->[-1] }
 
 sub map {
-  my ($self, $cb) = @_;
-  return $self->new(map { $_->$cb } @$self);
+  my ($self, $cb) = (shift, shift);
+  return $self->new(map { $_->$cb(@_) } @$self);
 }
 
 sub new {
@@ -67,9 +54,10 @@ sub new {
   return bless [@_], ref $class || $class;
 }
 
-sub pluck {
-  my ($self, $method, @args) = @_;
-  return $self->map(sub { $_->$method(@args) });
+sub reduce {
+  my $self = shift;
+  @_ = (@_, @$self);
+  goto &List::Util::reduce;
 }
 
 sub reverse { $_[0]->new(reverse @{$_[0]}) }
@@ -85,14 +73,25 @@ sub slice {
 
 sub sort {
   my ($self, $cb) = @_;
-  return $self->new($cb ? sort { $a->$cb($b) } @$self : sort @$self);
+
+  return $self->new(sort @$self) unless $cb;
+
+  my $caller = caller;
+  no strict 'refs';
+  my @sorted = sort {
+    local (*{"${caller}::a"}, *{"${caller}::b"}) = (\$a, \$b);
+    $a->$cb($b);
+  } @$self;
+  return $self->new(@sorted);
 }
 
 sub tap { shift->Mojo::Base::tap(@_) }
 
+sub to_array { [@{shift()}] }
+
 sub uniq {
   my %seen;
-  return shift->grep(sub { !$seen{$_}++ });
+  return $_[0]->new(grep { !$seen{$_}++ } @{$_[0]});
 }
 
 sub _flatten {
@@ -116,16 +115,13 @@ Mojo::Collection - Collection
   # Manipulate collection
   my $collection = Mojo::Collection->new(qw(just works));
   unshift @$collection, 'it';
+  say $collection->join("\n");
 
   # Chain methods
   $collection->map(sub { ucfirst })->shuffle->each(sub {
-    my ($word, $count) = @_;
-    say "$count: $word";
+    my ($word, $num) = @_;
+    say "$num: $word";
   });
-
-  # Stringify collection
-  say $collection->join("\n");
-  say "$collection";
 
   # Use the alternative constructor
   use Mojo::Collection 'c';
@@ -162,6 +158,9 @@ L<Mojo::Collection> implements the following methods.
 Create a new collection with all elements that are defined and not an empty
 string.
 
+  # "0, 1, 2, 3"
+  Mojo::Collection->new(0, 1, undef, 2, '', 3)->compact->join(', ');
+
 =head2 each
 
   my @elements = $collection->each;
@@ -171,9 +170,10 @@ Evaluate callback for each element in collection or return all elements as a
 list if none has been provided. The element will be the first argument passed
 to the callback and is also available as C<$_>.
 
+  # Make a numbered list
   $collection->each(sub {
-    my ($e, $count) = @_;
-    say "$count: $e";
+    my ($e, $num) = @_;
+    say "$num: $e";
   });
 
 =head2 first
@@ -187,7 +187,11 @@ return the first one that matched the regular expression, or for which the
 callback returned true. The element will be the first argument passed to the
 callback and is also available as C<$_>.
 
-  my $five = $collection->first(sub { $_ == 5 });
+  # Find first value that contains the word "mojo"
+  my $interesting = $collection->first(qr/mojo/i);
+
+  # Find first value that is greater than 5
+  my $greater = $collection->first(sub { $_ > 5 });
 
 =head2 flatten
 
@@ -195,6 +199,9 @@ callback and is also available as C<$_>.
 
 Flatten nested collections/arrays recursively and create a new collection with
 all elements.
+
+  # "1, 2, 3, 4, 5, 6, 7"
+  Mojo::Collection->new(1, [2, [3, 4], 5, [6]], 7)->flatten->join(', ');
 
 =head2 grep
 
@@ -206,7 +213,11 @@ create a new collection with all elements that matched the regular expression,
 or for which the callback returned true. The element will be the first
 argument passed to the callback and is also available as C<$_>.
 
+  # Find all values that contain the word "mojo"
   my $interesting = $collection->grep(qr/mojo/i);
+
+  # Find all values that are greater than 5
+  my $greater = $collection->grep(sub { $_ > 5 });
 
 =head2 join
 
@@ -215,7 +226,8 @@ argument passed to the callback and is also available as C<$_>.
 
 Turn collection into L<Mojo::ByteStream>.
 
-  $collection->join("\n")->say;
+  # Join all values with commas
+  $collection->join(', ')->say;
 
 =head2 last
 
@@ -226,12 +238,18 @@ Return the last element in collection.
 =head2 map
 
   my $new = $collection->map(sub {...});
+  my $new = $collection->map($method);
+  my $new = $collection->map($method, @args);
 
-Evaluate callback for each element in collection and create a new collection
-from the results. The element will be the first argument passed to the
-callback and is also available as C<$_>.
+Evaluate callback for, or call method on, each element in collection and
+create a new collection from the results. The element will be the first
+argument passed to the callback and is also available as C<$_>.
 
-  my $doubled = $collection->map(sub { $_ * 2 });
+  # Longer version
+  my $new = $collection->map(sub { $_->$method(@args) });
+
+  # Append the word "mojo" to all values
+  my $mojoified = $collection->map(sub { $_ . 'mojo' });
 
 =head2 new
 
@@ -239,16 +257,19 @@ callback and is also available as C<$_>.
 
 Construct a new array-based L<Mojo::Collection> object.
 
-=head2 pluck
+=head2 reduce
 
-  my $new = $collection->pluck($method);
-  my $new = $collection->pluck($method, @args);
+  my $result = $collection->reduce(sub {...});
+  my $result = $collection->reduce(sub {...}, $initial);
 
-Call method on each element in collection and create a new collection from the
-results.
+Reduce elements in collection with callback, the first element will be used as
+initial value if none has been provided.
 
-  # Equal to but more convenient than
-  my $new = $collection->map(sub { $_->$method(@args) });
+  # Calculate the sum of all values
+  my $sum = $collection->reduce(sub { $a + $b });
+
+  # Count how often each value occurs in collection
+  my $hash = $collection->reduce(sub { $a->{$b}++; $a }, {});
 
 =head2 reverse
 
@@ -261,6 +282,9 @@ Create a new collection with all elements in reverse order.
   my $new = $collection->slice(4 .. 7);
 
 Create a new collection with all selected elements.
+
+  # "B C E"
+  Mojo::Collection->new('A', 'B', 'C', 'D', 'E')->slice(1, 2, 4)->join(' ');
 
 =head2 shuffle
 
@@ -282,7 +306,8 @@ Number of elements in collection.
 Sort elements based on return value of callback and create a new collection
 from the results.
 
-  my $insensitive = $collection->sort(sub { uc(shift) cmp uc(shift) });
+  # Sort values case-insensitive
+  my $case_insensitive = $collection->sort(sub { uc($a) cmp uc($b) });
 
 =head2 tap
 
@@ -290,36 +315,20 @@ from the results.
 
 Alias for L<Mojo::Base/"tap">.
 
+=head2 to_array
+
+  my $array = $collection->to_array;
+
+Turn collection into array reference.
+
 =head2 uniq
 
   my $new = $collection->uniq;
 
 Create a new collection without duplicate elements.
 
-=head1 AUTOLOAD
-
-In addition to the L</"METHODS"> above, you can also call methods provided by
-all elements in the collection directly and create a new collection from the
-results, similar to L</"pluck">.
-
-  push @$collection, Mojo::DOM->new("<div><h1>$_</h1></div>") for 1 .. 9;
-  say $collection->find('h1')->type('h2')->prepend_content('Test ')->root;
-
-=head1 OPERATORS
-
-L<Mojo::Collection> overloads the following operators.
-
-=head2 bool
-
-  my $bool = !!$collection;
-
-Always true.
-
-=head2 stringify
-
-  my $str = "$collection";
-
-Stringify elements in collection and L</"join"> them with newlines.
+  # "foo bar baz"
+  Mojo::Collection->new('foo', 'bar', 'bar', 'baz')->uniq->join(' ');
 
 =head1 SEE ALSO
 

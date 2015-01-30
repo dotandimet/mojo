@@ -1,8 +1,8 @@
 package Mojolicious::Validator::Validation;
 use Mojo::Base -base;
 
-use Carp 'croak';
-use Scalar::Util 'blessed';
+use Carp         ();
+use Scalar::Util ();
 
 has [qw(csrf_token topic validator)];
 has [qw(input output)] => sub { {} };
@@ -10,16 +10,13 @@ has [qw(input output)] => sub { {} };
 sub AUTOLOAD {
   my $self = shift;
 
-  my ($package, $method) = split /::(\w+)$/, our $AUTOLOAD;
-  croak "Undefined subroutine &${package}::$method called"
-    unless blessed $self && $self->isa(__PACKAGE__);
+  my ($package, $method) = our $AUTOLOAD =~ /^(.+)::(.+)$/;
+  Carp::croak "Undefined subroutine &${package}::$method called"
+    unless Scalar::Util::blessed $self && $self->isa(__PACKAGE__);
 
-  croak qq{Can't locate object method "$method" via package "$package"}
-    unless $self->validator->checks->{$method};
-  return $self->check($method => @_);
+  return $self->check($method => @_) if $self->validator->checks->{$method};
+  Carp::croak qq{Can't locate object method "$method" via package "$package"};
 }
-
-sub DESTROY { }
 
 sub check {
   my ($self, $check) = (shift, shift);
@@ -46,11 +43,19 @@ sub csrf_protect {
 }
 
 sub error {
-  my ($self, $name) = (shift, shift);
+  my $self = shift;
+
+  return sort keys %{$self->{error}} unless defined(my $name = shift);
   return $self->{error}{$name} unless @_;
   $self->{error}{$name} = shift;
   delete $self->output->{$name};
+
   return $self;
+}
+
+sub every_param {
+  return [] unless defined(my $value = shift->output->{shift()});
+  return [ref $value eq 'ARRAY' ? @$value : $value];
 }
 
 sub has_data { !!keys %{shift->input} }
@@ -74,14 +79,12 @@ sub param {
   my ($self, $name) = @_;
 
   # Multiple names
-  return map { scalar $self->param($_) } @$name if ref $name eq 'ARRAY';
+  return map { $self->param($_) } @$name if ref $name eq 'ARRAY';
 
   # List names
   return sort keys %{$self->output} unless defined $name;
 
-  my $value = $self->output->{$name};
-  my @values = ref $value eq 'ARRAY' ? @$value : ($value);
-  return wantarray ? @values : $values[0];
+  return $self->every_param($name)->[-1];
 }
 
 sub required {
@@ -121,8 +124,8 @@ L<Mojolicious::Validator::Validation> implements the following attributes.
 
 =head2 csrf_token
 
-  my $token   = $validation->token;
-  $validation = $validation->token('fa6a08...');
+  my $token   = $validation->csrf_token;
+  $validation = $validation->csrf_token('fa6a08...');
 
 CSRF token.
 
@@ -174,6 +177,7 @@ Validate C<csrf_token> and protect from cross-site request forgery.
 
 =head2 error
 
+  my @names   = $validation->error;
   my $err     = $validation->error('foo');
   $validation = $validation->error(foo => ['custom_check']);
 
@@ -181,6 +185,16 @@ Get or set details for failed validation check, at any given time there can
 only be one per field.
 
   my ($check, $result, @args) = @{$validation->error('foo')};
+
+=head2 every_param
+
+  my $values = $validation->every_param('foo');
+
+Similar to L</"param">, but returns all values sharing the same name as an
+array reference.
+
+  # Get first value
+  my $first = $validation->every_param('foo')->[0];
 
 =head2 has_data
 
@@ -212,11 +226,12 @@ Change validation L</"topic">.
 =head2 param
 
   my @names       = $validation->param;
-  my $foo         = $validation->param('foo');
-  my @foo         = $validation->param('foo');
+  my $value       = $validation->param('foo');
   my ($foo, $bar) = $validation->param(['foo', 'bar']);
 
-Access validated parameters, similar to L<Mojolicious::Controller/"param">.
+Access validated parameters. If there are multiple values sharing the same
+name, and you want to access more than just the last one, you can use
+L</"every_param">.
 
 =head2 required
 
@@ -231,9 +246,13 @@ In addition to the L</"ATTRIBUTES"> and L</"METHODS"> above, you can also call
 validation checks provided by L</"validator"> on
 L<Mojolicious::Validator::Validation> objects, similar to L</"check">.
 
+  # Call validation checks
   $validation->required('foo')->size(2, 5)->like(qr/^[A-Z]/);
   $validation->optional('bar')->equal_to('foo');
   $validation->optional('baz')->in(qw(test 123));
+
+  # Longer version
+  $validation->required('foo')->check('size', 2,5)->check('like', qr/^[A-Z]/);
 
 =head1 SEE ALSO
 

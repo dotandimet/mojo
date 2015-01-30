@@ -5,7 +5,7 @@ use re 'regexp_pattern';
 use Getopt::Long qw(GetOptionsFromArray :config no_auto_abbrev no_ignore_case);
 use Mojo::Util qw(encode tablify);
 
-has description => 'Show available routes.';
+has description => 'Show available routes';
 has usage => sub { shift->extract_usage };
 
 sub run {
@@ -28,9 +28,9 @@ sub _walk {
 
   # Flags
   my @flags;
-  push @flags, $route->inline ? 'B' : '.';
   push @flags, @{$route->over || []} ? 'C' : '.';
   push @flags, (my $partial = $route->partial) ? 'D' : '.';
+  push @flags, $route->inline       ? 'U' : '.';
   push @flags, $route->is_websocket ? 'W' : '.';
   push @$row, join('', @flags) if $verbose;
 
@@ -44,13 +44,10 @@ sub _walk {
 
   # Regex (verbose)
   my $pattern = $route->pattern;
-  $pattern->match('/', $route->is_endpoint);
-  my $regex = (regexp_pattern $pattern->regex)[0];
-  my $format = (regexp_pattern($pattern->format_regex || ''))[0];
-  my $optional
-    = !$pattern->constraints->{format} || $pattern->defaults->{format};
-  $regex .= $optional ? "(?:$format)?" : $format if $format && !$partial;
-  push @$row, $regex if $verbose;
+  $pattern->match('/', $route->is_endpoint && !$partial);
+  my $regex  = (regexp_pattern $pattern->regex)[0];
+  my $format = (regexp_pattern($pattern->format_regex))[0];
+  push @$row, $regex, $format ? $format : '' if $verbose;
 
   $depth++;
   _walk($_, $depth, $rows, $verbose) for @{$route->children};
@@ -71,7 +68,7 @@ Mojolicious::Command::routes - Routes command
 
   Options:
     -v, --verbose   Print additional details about routes, flags indicate
-                    B=Bridge, C=Conditions, D=Detour and W=WebSocket.
+                    C=Conditions, D=Detour, U=Under and W=WebSocket
 
 =head1 DESCRIPTION
 
@@ -91,14 +88,14 @@ L<Mojolicious::Command> and implements the following new ones.
 =head2 description
 
   my $description = $routes->description;
-  $routes         = $routes->description('Foo!');
+  $routes         = $routes->description('Foo');
 
 Short description of this command, used for the command list.
 
 =head2 usage
 
   my $usage = $routes->usage;
-  $routes   = $routes->usage('Foo!');
+  $routes   = $routes->usage('Foo');
 
 Usage information for this command, used for the help screen.
 

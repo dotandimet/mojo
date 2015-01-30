@@ -2,7 +2,7 @@ package Mojolicious::Plugin::TagHelpers;
 use Mojo::Base 'Mojolicious::Plugin';
 
 use Mojo::ByteStream;
-use Mojo::Util qw(deprecated xml_escape);
+use Mojo::DOM::HTML;
 use Scalar::Util 'blessed';
 
 sub register {
@@ -44,17 +44,17 @@ sub register {
 }
 
 sub _csrf_field {
-  my $self = shift;
-  return _hidden_field($self, csrf_token => $self->csrf_token, @_);
+  my $c = shift;
+  return _hidden_field($c, csrf_token => $c->helpers->csrf_token, @_);
 }
 
 sub _form_for {
-  my ($self, @url) = (shift, shift);
+  my ($c, @url) = (shift, shift);
   push @url, shift if ref $_[0] eq 'HASH';
 
   # POST detection
   my @post;
-  if (my $r = $self->app->routes->lookup($url[0])) {
+  if (my $r = $c->app->routes->lookup($url[0])) {
     my %methods = (GET => 1, POST => 1);
     do {
       my @via = @{$r->via || []};
@@ -63,20 +63,20 @@ sub _form_for {
     @post = (method => 'POST') if $methods{POST} && !$methods{GET};
   }
 
-  return _tag('form', action => $self->url_for(@url), @post, @_);
+  return _tag('form', action => $c->url_for(@url), @post, @_);
 }
 
 sub _hidden_field {
-  my $self = shift;
+  my $c = shift;
   return _tag('input', name => shift, value => shift, @_, type => 'hidden');
 }
 
 sub _input {
-  my ($self, $name) = (shift, shift);
+  my ($c, $name) = (shift, shift);
   my %attrs = @_ % 2 ? (value => shift, @_) : @_;
 
   # Special selection value
-  my @values = $self->param($name);
+  my @values = @{$c->every_param($name)};
   my $type = $attrs{type} || '';
   if (@values && $type ne 'submit') {
 
@@ -84,39 +84,32 @@ sub _input {
     my $value = $attrs{value} // '';
     if ($type eq 'checkbox' || $type eq 'radio') {
       $attrs{value} = $value;
-      $attrs{checked} = 'checked' if grep { $_ eq $value } @values;
+      $attrs{checked} = undef if grep { $_ eq $value } @values;
     }
 
     # Others
     else { $attrs{value} = $values[0] }
   }
 
-  return _validation($self, $name, 'input', %attrs, name => $name);
+  return _validation($c, $name, 'input', name => $name, %attrs);
 }
 
 sub _javascript {
-  my $self = shift;
-
-  # CDATA
-  my $cb = sub {''};
-  if (ref $_[-1] eq 'CODE' && (my $old = pop)) {
-    $cb = sub { "//<![CDATA[\n" . $old->() . "\n//]]>" }
-  }
-
-  # URL
-  my $src = @_ % 2 ? $self->url_for(shift) : undef;
-
-  return _tag('script', @_, $src ? (src => $src) : (), $cb);
+  my $c = shift;
+  my $content
+    = ref $_[-1] eq 'CODE' ? "//<![CDATA[\n" . pop->() . "\n//]]>" : '';
+  my @src = @_ % 2 ? (src => $c->url_for(shift)) : ();
+  return _tag('script', @src, @_, sub {$content});
 }
 
 sub _label_for {
-  my ($self, $name) = (shift, shift);
+  my ($c, $name) = (shift, shift);
   my $content = ref $_[-1] eq 'CODE' ? pop : shift;
-  return _validation($self, $name, 'label', for => $name, @_, $content);
+  return _validation($c, $name, 'label', for => $name, @_, $content);
 }
 
 sub _link_to {
-  my ($self, $content) = (shift, shift);
+  my ($c, $content) = (shift, shift);
   my @url = ($content);
 
   # Content
@@ -128,41 +121,30 @@ sub _link_to {
   # Captures
   push @url, shift if ref $_[0] eq 'HASH';
 
-  return _tag('a', href => $self->url_for(@url), @_);
+  return _tag('a', href => $c->url_for(@url), @_);
 }
 
 sub _option {
   my ($values, $pair) = @_;
   $pair = [$pair => $pair] unless ref $pair eq 'ARRAY';
-
-  # Attributes
   my %attrs = (value => $pair->[1]);
-  $attrs{selected} = 'selected' if exists $values->{$pair->[1]};
-  %attrs = (%attrs, @$pair[2 .. $#$pair]);
-
-  return _tag('option', %attrs, sub { xml_escape $pair->[0] });
+  $attrs{selected} = undef if exists $values->{$pair->[1]};
+  return _tag('option', %attrs, @$pair[2 .. $#$pair], $pair->[0]);
 }
 
 sub _password_field {
-  my ($self, $name) = (shift, shift);
-  return _validation($self, $name, 'input', @_, name => $name,
+  my ($c, $name) = (shift, shift);
+  return _validation($c, $name, 'input', name => $name, @_,
     type => 'password');
 }
 
 sub _select_field {
-  my ($self, $name, $options, %attrs) = (shift, shift, shift, @_);
+  my ($c, $name, $options, %attrs) = (shift, shift, shift, @_);
 
-  my %values = map { $_ => 1 } $self->param($name);
+  my %values = map { $_ => 1 } @{$c->every_param($name)};
 
   my $groups = '';
   for my $group (@$options) {
-
-    # DEPRECATED in Top Hat!
-    if (ref $group eq 'HASH') {
-      deprecated
-        'hash references are DEPRECATED in favor of Mojo::Collection objects';
-      $group = Mojo::Collection->new(each %$group);
-    }
 
     # "optgroup" tag
     if (blessed $group && $group->isa('Mojo::Collection')) {
@@ -175,85 +157,64 @@ sub _select_field {
     else { $groups .= _option(\%values, $group) }
   }
 
-  return _validation($self, $name, 'select', %attrs, name => $name,
+  return _validation($c, $name, 'select', name => $name, %attrs,
     sub {$groups});
 }
 
 sub _stylesheet {
-  my $self = shift;
-
-  # CDATA
-  my $cb;
-  if (ref $_[-1] eq 'CODE' && (my $old = pop)) {
-    $cb = sub { "/*<![CDATA[*/\n" . $old->() . "\n/*]]>*/" }
-  }
-
-  # "link" or "style" tag
-  my $href = @_ % 2 ? $self->url_for(shift) : undef;
-  return $href
-    ? _tag('link', rel => 'stylesheet', href => $href, @_)
-    : _tag('style', @_, $cb);
+  my $c = shift;
+  my $content
+    = ref $_[-1] eq 'CODE' ? "/*<![CDATA[*/\n" . pop->() . "\n/*]]>*/" : '';
+  return _tag('style', @_, sub {$content}) unless @_ % 2;
+  return _tag('link', rel => 'stylesheet', href => $c->url_for(shift), @_);
 }
 
 sub _submit_button {
-  my $self = shift;
+  my $c = shift;
   return _tag('input', value => shift // 'Ok', @_, type => 'submit');
 }
 
 sub _tag {
-  my $name = shift;
+  my $tree = ['tag', shift, undef, undef];
 
   # Content
-  my $cb = ref $_[-1] eq 'CODE' ? pop : undef;
-  my $content = @_ % 2 ? pop : undef;
-
-  # Start tag
-  my $tag = "<$name";
+  if (ref $_[-1] eq 'CODE') { push @$tree, ['raw', pop->()] }
+  elsif (@_ % 2) { push @$tree, ['text', pop] }
 
   # Attributes
-  my %attrs = @_;
-  if ($attrs{data} && ref $attrs{data} eq 'HASH') {
-    while (my ($key, $value) = each %{$attrs{data}}) {
+  my $attrs = $tree->[2] = {@_};
+  if ($attrs->{data} && ref $attrs->{data} eq 'HASH') {
+    while (my ($key, $value) = each %{$attrs->{data}}) {
       $key =~ y/_/-/;
-      $attrs{lc("data-$key")} = $value;
+      $attrs->{lc "data-$key"} = $value;
     }
-    delete $attrs{data};
+    delete $attrs->{data};
   }
-  $tag .= qq{ $_="} . xml_escape($attrs{$_} // '') . '"' for sort keys %attrs;
 
-  # Empty element
-  unless ($cb || defined $content) { $tag .= ' />' }
-
-  # End tag
-  else { $tag .= '>' . ($cb ? $cb->() : xml_escape($content)) . "</$name>" }
-
-  # Prevent escaping
-  return Mojo::ByteStream->new($tag);
+  return Mojo::ByteStream->new(Mojo::DOM::HTML::_render($tree));
 }
 
 sub _tag_with_error {
-  my ($self, $tag) = (shift, shift);
+  my ($c, $tag) = (shift, shift);
   my ($content, %attrs) = (@_ % 2 ? pop : undef, @_);
   $attrs{class} .= $attrs{class} ? ' field-with-error' : 'field-with-error';
   return _tag($tag, %attrs, defined $content ? $content : ());
 }
 
 sub _text_area {
-  my ($self, $name) = (shift, shift);
+  my ($c, $name) = (shift, shift);
 
-  # Make sure content is wrapped
-  my $cb = ref $_[-1] eq 'CODE' ? pop : sub {''};
+  my $cb = ref $_[-1] eq 'CODE' ? pop : undef;
   my $content = @_ % 2 ? shift : undef;
-  $cb = sub { xml_escape $content }
-    if defined($content = $self->param($name) // $content);
+  $content = $c->param($name) // $content // $cb // '';
 
-  return _validation($self, $name, 'textarea', @_, name => $name, $cb);
+  return _validation($c, $name, 'textarea', name => $name, @_, $content);
 }
 
 sub _validation {
-  my ($self, $name) = (shift, shift);
-  return _tag(@_) unless $self->validation->has_error($name);
-  return $self->tag_with_error(@_);
+  my ($c, $name) = (shift, shift);
+  return _tag(@_) unless $c->validation->has_error($name);
+  return $c->helpers->tag_with_error(@_);
 }
 
 1;
@@ -288,10 +249,10 @@ necessary attributes always be generated automatically.
   <%= radio_button country => 'uk'      %> UK
 
 For fields that failed validation with L<Mojolicious::Controller/"validation">
-the C<field-with-error> class will be automatically added through the
-C<tag_with_error> helper, to make styling with CSS easier.
+the C<field-with-error> class will be automatically added through
+L</"tag_with_error">, to make styling with CSS easier.
 
-  <input class="field-with-error" name="age" type="text" value="250" />
+  <input class="field-with-error" name="age" type="text" value="250">
 
 This is a core plugin, that means it is always enabled and its code a good
 example for learning how to build new plugins, you're welcome to fork it.
@@ -311,8 +272,8 @@ L<Mojolicious::Plugin::TagHelpers> implements the following helpers.
 Generate C<input> tag of type C<checkbox>. Previous input values will
 automatically get picked up and shown as default.
 
-  <input name="employed" type="checkbox" value="1" />
-  <input disabled="disabled" name="employed" type="checkbox" value="1" />
+  <input name="employed" type="checkbox" value="1">
+  <input disabled="disabled" name="employed" type="checkbox" value="1">
 
 =head2 color_field
 
@@ -323,9 +284,9 @@ automatically get picked up and shown as default.
 Generate C<input> tag of type C<color>. Previous input values will
 automatically get picked up and shown as default.
 
-  <input name="background" type="color" />
-  <input name="background" type="color" value="#ffffff" />
-  <input id="foo" name="background" type="color" value="#ffffff" />
+  <input name="background" type="color">
+  <input name="background" type="color" value="#ffffff">
+  <input id="foo" name="background" type="color" value="#ffffff">
 
 =head2 csrf_field
 
@@ -334,7 +295,7 @@ automatically get picked up and shown as default.
 Generate C<input> tag of type C<hidden> with
 L<Mojolicious::Plugin::DefaultHelpers/"csrf_token">.
 
-  <input name="csrf_token" type="hidden" value="fa6a08..." />
+  <input name="csrf_token" type="hidden" value="fa6a08...">
 
 =head2 date_field
 
@@ -345,9 +306,9 @@ L<Mojolicious::Plugin::DefaultHelpers/"csrf_token">.
 Generate C<input> tag of type C<date>. Previous input values will
 automatically get picked up and shown as default.
 
-  <input name="end" type="date" />
-  <input name="end" type="date" value="2012-12-21" />
-  <input id="foo" name="end" type="date" value="2012-12-21" />
+  <input name="end" type="date">
+  <input name="end" type="date" value="2012-12-21">
+  <input id="foo" name="end" type="date" value="2012-12-21">
 
 =head2 datetime_field
 
@@ -358,9 +319,9 @@ automatically get picked up and shown as default.
 Generate C<input> tag of type C<datetime>. Previous input values will
 automatically get picked up and shown as default.
 
-  <input name="end" type="datetime" />
-  <input name="end" type="datetime" value="2012-12-21T23:59:59Z" />
-  <input id="foo" name="end" type="datetime" value="2012-12-21T23:59:59Z" />
+  <input name="end" type="datetime">
+  <input name="end" type="datetime" value="2012-12-21T23:59:59Z">
+  <input id="foo" name="end" type="datetime" value="2012-12-21T23:59:59Z">
 
 =head2 email_field
 
@@ -371,9 +332,9 @@ automatically get picked up and shown as default.
 Generate C<input> tag of type C<email>. Previous input values will
 automatically get picked up and shown as default.
 
-  <input name="notify" type="email" />
-  <input name="notify" type="email" value="nospam@example.com" />
-  <input id="foo" name="notify" type="email" value="nospam@example.com" />
+  <input name="notify" type="email">
+  <input name="notify" type="email" value="nospam@example.com">
+  <input id="foo" name="notify" type="email" value="nospam@example.com">
 
 =head2 file_field
 
@@ -382,8 +343,8 @@ automatically get picked up and shown as default.
 
 Generate C<input> tag of type C<file>.
 
-  <input name="avatar" type="file" />
-  <input id="foo" name="avatar" type="file" />
+  <input name="avatar" type="file">
+  <input id="foo" name="avatar" type="file">
 
 =head2 form_for
 
@@ -409,20 +370,20 @@ routes that allow C<POST> but not C<GET>, a C<method> attribute will be
 automatically added.
 
   <form action="/path/to/login">
-    <input name="first_name" />
-    <input value="Ok" type="submit" />
+    <input name="first_name" type="text">
+    <input value="Ok" type="submit">
   </form>
   <form action="/path/to/login.txt" method="POST">
-    <input name="first_name" />
-    <input value="Ok" type="submit" />
+    <input name="first_name" type="text">
+    <input value="Ok" type="submit">
   </form>
   <form action="/path/to/login" enctype="multipart/form-data">
-    <input disabled="disabled" name="first_name" />
-    <input value="Ok" type="submit" />
+    <input disabled="disabled" name="first_name" type="text">
+    <input value="Ok" type="submit">
   </form>
   <form action="http://example.com/login" method="POST">
-    <input name="first_name" />
-    <input value="Ok" type="submit" />
+    <input name="first_name" type="text">
+    <input value="Ok" type="submit">
   </form>
 
 =head2 hidden_field
@@ -432,8 +393,8 @@ automatically added.
 
 Generate C<input> tag of type C<hidden>.
 
-  <input name="foo" type="hidden" value="bar" />
-  <input id="bar" name="foo" type="hidden" value="bar" />
+  <input name="foo" type="hidden" value="bar">
+  <input id="bar" name="foo" type="hidden" value="bar">
 
 =head2 image
 
@@ -442,8 +403,8 @@ Generate C<input> tag of type C<hidden>.
 
 Generate portable C<img> tag.
 
-  <img src="/path/to/images/foo.png" />
-  <img alt="Foo" src="/path/to/images/foo.png" />
+  <img src="/path/to/images/foo.png">
+  <img alt="Foo" src="/path/to/images/foo.png">
 
 =head2 input_tag
 
@@ -454,9 +415,9 @@ Generate portable C<img> tag.
 Generate C<input> tag. Previous input values will automatically get picked up
 and shown as default.
 
-  <input name="first_name" />
-  <input name="first_name" value="Default name" />
-  <input name="employed" type="checkbox" />
+  <input name="first_name">
+  <input name="first_name" value="Default name">
+  <input name="employed" type="checkbox">
 
 =head2 javascript
 
@@ -467,7 +428,7 @@ and shown as default.
 
 Generate portable C<script> tag for JavaScript asset.
 
-  <script src="/path/to/script.js" />
+  <script src="/path/to/script.js"></script>
   <script><![CDATA[
     var a = 'b';
   ]]></script>
@@ -530,9 +491,9 @@ to using the capitalized link target as content.
 Generate C<input> tag of type C<month>. Previous input values will
 automatically get picked up and shown as default.
 
-  <input name="vacation" type="month" />
-  <input name="vacation" type="month" value="2012-12" />
-  <input id="foo" name="vacation" type="month" value="2012-12" />
+  <input name="vacation" type="month">
+  <input name="vacation" type="month" value="2012-12">
+  <input id="foo" name="vacation" type="month" value="2012-12">
 
 =head2 number_field
 
@@ -543,9 +504,9 @@ automatically get picked up and shown as default.
 Generate C<input> tag of type C<number>. Previous input values will
 automatically get picked up and shown as default.
 
-  <input name="age" type="number" />
-  <input name="age" type="number" value="25" />
-  <input id="foo" max="200" min="0" name="age" type="number" value="25" />
+  <input name="age" type="number">
+  <input name="age" type="number" value="25">
+  <input id="foo" max="200" min="0" name="age" type="number" value="25">
 
 =head2 password_field
 
@@ -554,8 +515,8 @@ automatically get picked up and shown as default.
 
 Generate C<input> tag of type C<password>.
 
-  <input name="pass" type="password" />
-  <input id="foo" name="pass" type="password" />
+  <input name="pass" type="password">
+  <input id="foo" name="pass" type="password">
 
 =head2 radio_button
 
@@ -565,8 +526,8 @@ Generate C<input> tag of type C<password>.
 Generate C<input> tag of type C<radio>. Previous input values will
 automatically get picked up and shown as default.
 
-  <input name="country" type="radio" value="germany" />
-  <input id="foo" name="country" type="radio" value="germany" />
+  <input name="country" type="radio" value="germany">
+  <input id="foo" name="country" type="radio" value="germany">
 
 =head2 range_field
 
@@ -577,9 +538,9 @@ automatically get picked up and shown as default.
 Generate C<input> tag of type C<range>. Previous input values will
 automatically get picked up and shown as default.
 
-  <input name="age" type="range" />
-  <input name="age" type="range" value="25" />
-  <input id="foo" max="200" min="200" name="age" type="range" value="25" />
+  <input name="age" type="range">
+  <input name="age" type="range" value="25">
+  <input id="foo" max="200" min="200" name="age" type="range" value="25">
 
 =head2 search_field
 
@@ -590,9 +551,9 @@ automatically get picked up and shown as default.
 Generate C<input> tag of type C<search>. Previous input values will
 automatically get picked up and shown as default.
 
-  <input name="q" type="search" />
-  <input name="q" type="search" value="perl" />
-  <input id="foo" name="q" type="search" value="perl" />
+  <input name="q" type="search">
+  <input name="q" type="search" value="perl">
+  <input id="foo" name="q" type="search" value="perl">
 
 =head2 select_field
 
@@ -644,7 +605,7 @@ automatically get picked up and shown as default.
 
 Generate portable C<style> or C<link> tag for CSS asset.
 
-  <link href="/path/to/foo.css" rel="stylesheet" />
+  <link href="/path/to/foo.css" rel="stylesheet">
   <style><![CDATA[
     body {color: #000}
   ]]></style>
@@ -656,8 +617,8 @@ Generate portable C<style> or C<link> tag for CSS asset.
 
 Generate C<input> tag of type C<submit>.
 
-  <input type="submit" value="Ok" />
-  <input id="foo" type="submit" value="Ok!" />
+  <input type="submit" value="Ok">
+  <input id="foo" type="submit" value="Ok!">
 
 =head2 t
 
@@ -669,8 +630,9 @@ Alias for L</"tag">.
 
 =head2 tag
 
+  %= tag 'br'
   %= tag 'div'
-  %= tag 'div', id => 'foo'
+  %= tag 'div', id => 'foo', hidden => undef
   %= tag div => 'test & 123'
   %= tag div => (id => 'foo') => 'test & 123'
   %= tag div => (data => {my_id => 1, Name => 'test'}) => 'test & 123'
@@ -679,10 +641,12 @@ Alias for L</"tag">.
   % end
   <%= tag div => (id => 'foo') => begin %>test & 123<% end %>
 
-HTML/XML tag generator.
+HTML tag generator, the C<data> attribute may contain a hash reference with
+pairs to generate attributes from.
 
-  <div />
-  <div id="foo" />
+  <br>
+  <div></div>
+  <div id="foo" hidden></div>
   <div>test &amp; 123</div>
   <div id="foo">test &amp; 123</div>
   <div data-my-id="1" data-name="test">test &amp; 123</div>
@@ -693,12 +657,13 @@ HTML/XML tag generator.
 
 Very useful for reuse in more specific tag helpers.
 
-  $self->tag('div');
-  $self->tag('div', id => 'foo');
-  $self->tag(div => sub { 'Content' });
+  my $output = $c->tag('meta');
+  my $output = $c->tag('meta', charset => 'UTF-8');
+  my $output = $c->tag(div => '<p>This will be escaped</p>');
+  my $output = $c->tag(div => sub { '<p>This will not be escaped</p>' });
 
 Results are automatically wrapped in L<Mojo::ByteStream> objects to prevent
-accidental double escaping.
+accidental double escaping in C<ep> templates.
 
 =head2 tag_with_error
 
@@ -706,7 +671,7 @@ accidental double escaping.
 
 Same as L</"tag">, but adds the class C<field-with-error>.
 
-  <input class="foo field-with-error" />
+  <input class="foo field-with-error">
 
 =head2 tel_field
 
@@ -717,9 +682,9 @@ Same as L</"tag">, but adds the class C<field-with-error>.
 Generate C<input> tag of type C<tel>. Previous input values will automatically
 get picked up and shown as default.
 
-  <input name="work" type="tel" />
-  <input name="work" type="tel" value="123456789" />
-  <input id="foo" name="work" type="tel" value="123456789" />
+  <input name="work" type="tel">
+  <input name="work" type="tel" value="123456789">
+  <input id="foo" name="work" type="tel" value="123456789">
 
 =head2 text_area
 
@@ -749,9 +714,9 @@ up and shown as default.
 Generate C<input> tag of type C<text>. Previous input values will
 automatically get picked up and shown as default.
 
-  <input name="first_name" type="text" />
-  <input name="first_name" type="text" value="Default name" />
-  <input class="user" name="first_name" type="text" value="Default name" />
+  <input name="first_name" type="text">
+  <input name="first_name" type="text" value="Default name">
+  <input class="user" name="first_name" type="text" value="Default name">
 
 =head2 time_field
 
@@ -762,9 +727,9 @@ automatically get picked up and shown as default.
 Generate C<input> tag of type C<time>. Previous input values will
 automatically get picked up and shown as default.
 
-  <input name="start" type="time" />
-  <input name="start" type="time" value="23:59:59" />
-  <input id="foo" name="start" type="time" value="23:59:59" />
+  <input name="start" type="time">
+  <input name="start" type="time" value="23:59:59">
+  <input id="foo" name="start" type="time" value="23:59:59">
 
 =head2 url_field
 
@@ -775,9 +740,9 @@ automatically get picked up and shown as default.
 Generate C<input> tag of type C<url>. Previous input values will automatically
 get picked up and shown as default.
 
-  <input name="address" type="url" />
-  <input name="address" type="url" value="http://mojolicio.us" />
-  <input id="foo" name="address" type="url" value="http://mojolicio.us" />
+  <input name="address" type="url">
+  <input name="address" type="url" value="http://mojolicio.us">
+  <input id="foo" name="address" type="url" value="http://mojolicio.us">
 
 =head2 week_field
 
@@ -788,9 +753,9 @@ get picked up and shown as default.
 Generate C<input> tag of type C<week>. Previous input values will
 automatically get picked up and shown as default.
 
-  <input name="vacation" type="week" />
-  <input name="vacation" type="week" value="2012-W17" />
-  <input id="foo" name="vacation" type="week" value="2012-W17" />
+  <input name="vacation" type="week">
+  <input name="vacation" type="week" value="2012-W17">
+  <input id="foo" name="vacation" type="week" value="2012-W17">
 
 =head1 METHODS
 

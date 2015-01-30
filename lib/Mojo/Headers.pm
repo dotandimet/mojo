@@ -3,23 +3,25 @@ use Mojo::Base -base;
 
 use Mojo::Util 'monkey_patch';
 
-has max_line_size => sub { $ENV{MOJO_MAX_LINE_SIZE} || 10240 };
+has max_line_size => sub { $ENV{MOJO_MAX_LINE_SIZE} || 8192 };
+has max_lines     => sub { $ENV{MOJO_MAX_LINES}     || 100 };
 
 # Common headers
 my %NORMALCASE = map { lc($_) => $_ } (
   qw(Accept Accept-Charset Accept-Encoding Accept-Language Accept-Ranges),
-  qw(Allow Authorization Cache-Control Connection Content-Disposition),
-  qw(Content-Encoding Content-Length Content-Range Content-Type Cookie DNT),
-  qw(Date ETag Expect Expires Host If-Modified-Since Last-Modified Link),
-  qw(Location Origin Proxy-Authenticate Proxy-Authorization Range),
-  qw(Sec-WebSocket-Accept Sec-WebSocket-Extensions Sec-WebSocket-Key),
-  qw(Sec-WebSocket-Protocol Sec-WebSocket-Version Server Set-Cookie Status),
+  qw(Access-Control-Allow-Origin Allow Authorization Cache-Control Connection),
+  qw(Content-Disposition Content-Encoding Content-Language Content-Length),
+  qw(Content-Location Content-Range Content-Type Cookie DNT Date ETag Expect),
+  qw(Expires Host If-Modified-Since If-None-Match Last-Modified Link Location),
+  qw(Origin Proxy-Authenticate Proxy-Authorization Range Sec-WebSocket-Accept),
+  qw(Sec-WebSocket-Extensions Sec-WebSocket-Key Sec-WebSocket-Protocol),
+  qw(Sec-WebSocket-Version Server Set-Cookie Status Strict-Transport-Security),
   qw(TE Trailer Transfer-Encoding Upgrade User-Agent Vary WWW-Authenticate)
 );
 for my $header (values %NORMALCASE) {
   my $name = lc $header;
   $name =~ y/-/_/;
-  monkey_patch __PACKAGE__, $name, sub { scalar shift->header($header => @_) };
+  monkey_patch __PACKAGE__, $name, sub { shift->header($header => @_) };
 }
 
 sub add {
@@ -28,7 +30,7 @@ sub add {
   # Make sure we have a normal case entry for name
   my $key = lc $name;
   $self->{normalcase}{$key} //= $name unless $NORMALCASE{$key};
-  push @{$self->{headers}{$key}}, map { ref $_ eq 'ARRAY' ? $_ : [$_] } @_;
+  push @{$self->{headers}{$key}}, @_;
 
   return $self;
 }
@@ -48,7 +50,8 @@ sub from_hash {
   delete $self->{headers} if keys %{$hash} == 0;
 
   # Merge
-  while (my ($header, $value) = each %$hash) {
+  for my $header (keys %$hash) {
+    my $value = $hash->{$header};
     $self->add($header => ref $value eq 'ARRAY' ? @$value : $value);
   }
 
@@ -61,12 +64,8 @@ sub header {
   # Replace
   return $self->remove($name)->add($name, @_) if @_;
 
-  # String
-  return unless my $headers = $self->{headers}{lc $name};
-  return join ', ', map { join ', ', @$_ } @$headers unless wantarray;
-
-  # Array
-  return @$headers;
+  return undef unless my $headers = $self->{headers}{lc $name};
+  return join ', ', @$headers;
 }
 
 sub is_finished { (shift->{state} // '') eq 'finished' }
@@ -87,37 +86,38 @@ sub parse {
   $self->{state} = 'headers';
   $self->{buffer} .= shift // '';
   my $headers = $self->{cache} ||= [];
-  my $max = $self->max_line_size;
+  my $size    = $self->max_line_size;
+  my $lines   = $self->max_lines;
   while ($self->{buffer} =~ s/^(.*?)\x0d?\x0a//) {
     my $line = $1;
 
     # Check line size limit
-    if (length $line > $max) {
+    if ($+[0] > $size || @$headers >= $lines) {
       @$self{qw(state limit)} = ('finished', 1);
       return $self;
     }
 
     # New header
-    if ($line =~ /^(\S+)\s*:\s*(.*)$/) { push @$headers, $1, [$2] }
+    if ($line =~ /^(\S[^:]*)\s*:\s*(.*)$/) { push @$headers, [$1, $2] }
 
     # Multiline
-    elsif (@$headers && $line =~ s/^\s+//) { push @{$headers->[-1]}, $line }
+    elsif ($line =~ s/^\s+// && @$headers) { $headers->[-1][1] .= " $line" }
 
     # Empty line
     else {
-      $self->add(splice @$headers, 0, 2) while @$headers;
-      $self->{state} = 'finished';
+      $self->add(@$_) for @$headers;
+      @$self{qw(state cache)} = ('finished', []);
       return $self;
     }
   }
 
   # Check line size limit
-  @$self{qw(state limit)} = ('finished', 1) if length $self->{buffer} > $max;
+  @$self{qw(state limit)} = ('finished', 1) if length $self->{buffer} > $size;
 
   return $self;
 }
 
-sub referrer { scalar shift->header(Referer => @_) }
+sub referrer { shift->header(Referer => @_) }
 
 sub remove {
   my ($self, $name) = @_;
@@ -127,7 +127,7 @@ sub remove {
 
 sub to_hash {
   my ($self, $multi) = @_;
-  return {map { $_ => $multi ? [$self->header($_)] : scalar $self->header($_) }
+  return {map { $_ => $multi ? $self->{headers}{lc $_} : $self->header($_) }
       @{$self->names}};
 }
 
@@ -137,7 +137,7 @@ sub to_string {
   # Make sure multiline values are formatted correctly
   my @headers;
   for my $name (@{$self->names}) {
-    push @headers, "$name: " . join("\x0d\x0a ", @$_) for $self->header($name);
+    push @headers, "$name: $_" for @{$self->{headers}{lc $name}};
   }
 
   return join "\x0d\x0a", @headers;
@@ -171,7 +171,8 @@ Mojo::Headers - Headers
 =head1 DESCRIPTION
 
 L<Mojo::Headers> is a container for HTTP headers based on
-L<RFC 2616|http://tools.ietf.org/html/rfc2616>.
+L<RFC 7230|http://tools.ietf.org/html/rfc7230> and
+L<RFC 7231|http://tools.ietf.org/html/rfc7231>.
 
 =head1 ATTRIBUTES
 
@@ -183,7 +184,15 @@ L<Mojo::Headers> implements the following attributes.
   $headers = $headers->max_line_size(1024);
 
 Maximum header line size in bytes, defaults to the value of the
-C<MOJO_MAX_LINE_SIZE> environment variable or C<10240>.
+C<MOJO_MAX_LINE_SIZE> environment variable or C<8192> (8KB).
+
+=head2 max_lines
+
+  my $num  = $headers->max_lines;
+  $headers = $headers->max_lines(200);
+
+Maximum number of header lines, defaults to the value of the C<MOJO_MAX_LINES>
+environment variable or C<100>.
 
 =head1 METHODS
 
@@ -225,11 +234,18 @@ Shortcut for the C<Accept-Language> header.
 
 Shortcut for the C<Accept-Ranges> header.
 
+=head2 access_control_allow_origin
+
+  my $origin = $headers->access_control_allow_origin;
+  $headers   = $headers->access_control_allow_origin('*');
+
+Shortcut for the C<Access-Control-Allow-Origin> header from
+L<Cross-Origin Resource Sharing|http://www.w3.org/TR/cors/>.
+
 =head2 add
 
   $headers = $headers->add(Foo => 'one value');
   $headers = $headers->add(Foo => 'first value', 'second value');
-  $headers = $headers->add(Foo => ['first line', 'second line']);
 
 Add one or more header values with one or more lines.
 
@@ -297,12 +313,26 @@ Shortcut for the C<Content-Disposition> header.
 
 Shortcut for the C<Content-Encoding> header.
 
+=head2 content_language
+
+  my $language = $headers->content_language;
+  $headers     = $headers->content_language('en');
+
+Shortcut for the C<Content-Language> header.
+
 =head2 content_length
 
   my $len  = $headers->content_length;
   $headers = $headers->content_length(4000);
 
 Shortcut for the C<Content-Length> header.
+
+=head2 content_location
+
+  my $location = $headers->content_location;
+  $headers     = $headers->content_location('http://127.0.0.1/foo');
+
+Shortcut for the C<Content-Location> header.
 
 =head2 content_range
 
@@ -344,7 +374,7 @@ but is very commonly used.
 =head2 etag
 
   my $etag = $headers->etag;
-  $headers = $headers->etag('abc321');
+  $headers = $headers->etag('"abc321"');
 
 Shortcut for the C<ETag> header.
 
@@ -372,21 +402,11 @@ Parse headers from a hash reference, an empty hash removes all headers.
 
 =head2 header
 
-  my $value  = $headers->header('Foo');
-  my @values = $headers->header('Foo');
-  $headers   = $headers->header(Foo => 'one value');
-  $headers   = $headers->header(Foo => 'first value', 'second value');
-  $headers   = $headers->header(Foo => ['first line', 'second line']);
+  my $value = $headers->header('Foo');
+  $headers  = $headers->header(Foo => 'one value');
+  $headers  = $headers->header(Foo => 'first value', 'second value');
 
 Get or replace the current header values.
-
-  # Multiple headers with the same name
-  for my $header ($headers->header('Set-Cookie')) {
-    say 'Set-Cookie:';
-
-    # Multiple lines per header
-    say for @$header;
-  }
 
 =head2 host
 
@@ -402,6 +422,13 @@ Shortcut for the C<Host> header.
 
 Shortcut for the C<If-Modified-Since> header.
 
+=head2 if_none_match
+
+  my $etag = $headers->if_none_match;
+  $headers = $headers->if_none_match('"abc321"');
+
+Shortcut for the C<If-None-Match> header.
+
 =head2 is_finished
 
   my $bool = $headers->is_finished;
@@ -412,7 +439,7 @@ Check if header parser is finished.
 
   my $bool = $headers->is_limit_exceeded;
 
-Check if a header has exceeded C<max_line_size>.
+Check if headers have exceeded L</"max_line_size"> or L</"max_lines">.
 
 =head2 last_modified
 
@@ -564,6 +591,14 @@ L<RFC 6265|http://tools.ietf.org/html/rfc6265>.
 Shortcut for the C<Status> header from
 L<RFC 3875|http://tools.ietf.org/html/rfc3875>.
 
+=head2 strict_transport_security
+
+  my $policy = $headers->strict_transport_security;
+  $headers   = $headers->strict_transport_security('max-age=31536000');
+
+Shortcut for the C<Strict-Transport-Security> header from
+L<RFC 6797|http://tools.ietf.org/html/rfc6797>.
+
 =head2 te
 
   my $te   = $headers->te;
@@ -576,8 +611,8 @@ Shortcut for the C<TE> header.
   my $single = $headers->to_hash;
   my $multi  = $headers->to_hash(1);
 
-Turn headers into hash reference, nested array references to represent
-multiple headers with the same name are disabled by default.
+Turn headers into hash reference, array references to represent multiple
+headers with the same name are disabled by default.
 
   say $headers->to_hash->{DNT};
 

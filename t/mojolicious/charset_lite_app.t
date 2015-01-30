@@ -1,9 +1,6 @@
 use Mojo::Base -strict;
 
-BEGIN {
-  $ENV{MOJO_NO_IPV6} = 1;
-  $ENV{MOJO_REACTOR} = 'Mojo::Reactor::Poll';
-}
+BEGIN { $ENV{MOJO_REACTOR} = 'Mojo::Reactor::Poll' }
 
 use Test::More;
 use Mojo::ByteStream 'b';
@@ -28,18 +25,18 @@ app->renderer->add_handler(
 get '/' => 'index';
 
 post '/' => sub {
-  my $self = shift;
-  $self->render(text => "foo: " . $self->param('foo'));
+  my $c = shift;
+  $c->render(text => "foo: " . $c->param('foo'));
 };
 
 post '/data' => sub {
-  my $self = shift;
-  $self->render(data => $self->req->body, format => 'bin');
+  my $c = shift;
+  $c->render(data => $c->req->body, format => 'bin');
 };
 
 get '/unicode' => sub {
-  my $self = shift;
-  $self->render(test => $yatta, handler => 'test', format => 'txt');
+  my $c = shift;
+  $c->render(test => $yatta, handler => 'test', format => 'txt');
 };
 
 get '/json' => sub { shift->render(json => {test => $yatta}) };
@@ -47,13 +44,9 @@ get '/json' => sub { shift->render(json => {test => $yatta}) };
 get '/привет/мир' => sub { shift->render(json => {foo => $yatta}) };
 
 get '/params' => sub {
-  my $self = shift;
-  $self->render(
-    json => {
-      params => $self->req->url->query->to_hash,
-      yatta  => $self->param(['yatta'])
-    }
-  );
+  my $c = shift;
+  $c->render(json =>
+      {params => $c->req->url->query->to_hash, yatta => $c->param(['yatta'])});
 };
 
 my $t = Test::Mojo->new;

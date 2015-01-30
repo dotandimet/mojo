@@ -82,10 +82,19 @@ is $content->charset, 'UTF-8', 'right charset';
 $content->headers->content_type('text/plain; charset  =  "UTF-8"');
 is $content->charset, 'UTF-8', 'right charset';
 
-# Partial content with 128bit content length
+# Partial content with 128-bit content length
 $content = Mojo::Content::Single->new;
 $content->parse(
   "Content-Length: 18446744073709551616\x0d\x0a\x0d\x0aHello World!");
 is $content->asset->size, 12, 'right size';
+
+# Abstract methods
+eval { Mojo::Content->body_contains };
+like $@, qr/Method "body_contains" not implemented by subclass/, 'right error';
+eval { Mojo::Content->body_size };
+like $@, qr/Method "body_size" not implemented by subclass/, 'right error';
+eval { Mojo::Content->get_body_chunk };
+like $@, qr/Method "get_body_chunk" not implemented by subclass/,
+  'right error';
 
 done_testing();

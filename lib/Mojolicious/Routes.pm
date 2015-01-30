@@ -21,7 +21,7 @@ sub auto_render {
   my ($self, $c) = @_;
   my $stash = $c->stash;
   return if $stash->{'mojo.rendered'};
-  $c->render_maybe or $stash->{'mojo.routed'} or $c->render_not_found;
+  $c->render_maybe or $stash->{'mojo.routed'} or $c->helpers->reply->not_found;
 }
 
 sub continue {
@@ -34,9 +34,8 @@ sub continue {
 
   # Merge captures into stash
   my $stash = $c->stash;
-  my $captures = $stash->{'mojo.captures'} //= {};
-  %$captures = (%$captures, %$field);
-  %$stash    = (%$stash,    %$field);
+  @{$stash->{'mojo.captures'} //= {}}{keys %$field} = values %$field;
+  @$stash{keys %$field} = values %$field;
 
   my $continue;
   my $last = !$stack->[++$current];
@@ -87,17 +86,15 @@ sub match {
   my $match = Mojolicious::Routes::Match->new(root => $self);
   $c->match($match);
   my $cache = $self->cache;
-  my $cached = $cache ? $cache->get("$method:$path:$ws") : undef;
-  return $match->endpoint($cached->{endpoint})->stack($cached->{stack})
-    if $cached;
+  if (my $result = $cache->get("$method:$path:$ws")) {
+    return $match->endpoint($result->{endpoint})->stack($result->{stack});
+  }
 
   # Check routes
   $match->match($c => {method => $method, path => $path, websocket => $ws});
-
-  # Cache routes without conditions
-  return unless $cache && (my $endpoint = $match->endpoint);
-  my $result = {endpoint => $endpoint, stack => $match->stack};
-  $cache->set("$method:$path:$ws" => $result) unless $endpoint->has_conditions;
+  return unless my $route = $match->endpoint;
+  $cache->set(
+    "$method:$path:$ws" => {endpoint => $route, stack => $match->stack});
 }
 
 sub route {
@@ -114,9 +111,9 @@ sub _add {
 
 sub _callback {
   my ($self, $c, $cb, $last) = @_;
-  $c->stash->{'mojo.routed'}++ if $last;
+  $c->stash->{'mojo.routed'} = 1 if $last;
   my $app = $c->app;
-  $app->log->debug('Routing to a callback.');
+  $app->log->debug('Routing to a callback');
   return _action($app, $c, $cb, $last);
 }
 
@@ -145,11 +142,8 @@ sub _class {
   for my $class (@classes) {
 
     # Failed
-    unless (my $found = $self->_load($class)) {
-      next unless defined $found;
-      $log->debug(qq{Class "$class" is not a controller.});
-      return undef;
-    }
+    next unless defined(my $found = $self->_load($class));
+    return !$log->debug(qq{Class "$class" is not a controller}) unless $found;
 
     # Success
     my $new = $class->new(%$c);
@@ -158,7 +152,7 @@ sub _class {
   }
 
   # Nothing found
-  $log->debug(qq{Controller "$classes[-1]" does not exist.}) if @classes;
+  $log->debug(qq{Controller "$classes[-1]" does not exist}) if @classes;
   return @classes ? undef : 0;
 }
 
@@ -173,31 +167,31 @@ sub _controller {
   my $class = ref $new;
   my $app   = $old->app;
   my $log   = $app->log;
-  if (my $sub = $new->can('handler')) {
-    $log->debug(qq{Routing to application "$class".});
+  if ($new->isa('Mojo')) {
+    $log->debug(qq{Routing to application "$class"});
 
     # Try to connect routes
     if (my $sub = $new->can('routes')) {
       my $r = $new->$sub;
       weaken $r->parent($old->match->endpoint)->{parent} unless $r->parent;
     }
-    $new->$sub($old);
-    $old->stash->{'mojo.routed'}++;
+    $new->handler($old);
+    $old->stash->{'mojo.routed'} = 1;
   }
 
   # Action
   elsif (my $method = $field->{action}) {
     if (!$self->is_hidden($method)) {
-      $log->debug(qq{Routing to controller "$class" and action "$method".});
+      $log->debug(qq{Routing to controller "$class" and action "$method"});
 
       if (my $sub = $new->can($method)) {
-        $old->stash->{'mojo.routed'}++ if $last;
+        $old->stash->{'mojo.routed'} = 1 if $last;
         return 1 if _action($app, $new, $sub, $last);
       }
 
-      else { $log->debug('Action not found in controller.') }
+      else { $log->debug('Action not found in controller') }
     }
-    else { $log->debug(qq{Action "$method" is not allowed.}) }
+    else { $log->debug(qq{Action "$method" is not allowed}) }
   }
 
   return undef;
@@ -212,7 +206,7 @@ sub _load {
 
   # Check base classes
   return 0 unless first { $app->isa($_) } @{$self->base_classes};
-  return ++$self->{loaded}{$app};
+  return $self->{loaded}{$app} = 1;
 }
 
 1;
@@ -263,9 +257,6 @@ L<Mojolicious::Controller> and L<Mojo>.
 
 Routing cache, defaults to a L<Mojo::Cache> object.
 
-  # Disable caching
-  $r->cache(0);
-
 =head2 conditions
 
   my $conditions = $r->conditions;
@@ -289,7 +280,7 @@ C<attr>, C<has>, C<new> and C<tap>.
 Namespaces to load controllers from.
 
   # Add another namespace to load controllers from
-  push @{$r->namespaces}, 'MyApp::Controller';
+  push @{$r->namespaces}, 'MyApp::MyController';
 
 =head2 shortcuts
 

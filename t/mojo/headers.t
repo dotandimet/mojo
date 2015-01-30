@@ -21,9 +21,9 @@ is $hash->{Connection}, 'close',        'right value';
 is $hash->{Expect},     'continue-100', 'right value';
 is $hash->{'Content-Type'}, 'text/html', 'right value';
 $hash = $headers->to_hash(1);
-is_deeply $hash->{Connection},     [['close']],        'right structure';
-is_deeply $hash->{Expect},         [['continue-100']], 'right structure';
-is_deeply $hash->{'Content-Type'}, [['text/html']],    'right structure';
+is_deeply $hash->{Connection},     ['close'],        'right structure';
+is_deeply $hash->{Expect},         ['continue-100'], 'right structure';
+is_deeply $hash->{'Content-Type'}, ['text/html'],    'right structure';
 is_deeply [sort @{$headers->names}], [qw(Connection Content-Type Expect)],
   'right structure';
 $headers->expires('Thu, 01 Dec 1994 16:00:00 GMT');
@@ -50,14 +50,18 @@ is $headers->accept_charset('foo')->accept_charset,   'foo', 'right value';
 is $headers->accept_encoding('foo')->accept_encoding, 'foo', 'right value';
 is $headers->accept_language('foo')->accept_language, 'foo', 'right value';
 is $headers->accept_ranges('foo')->accept_ranges,     'foo', 'right value';
-is $headers->allow('foo')->allow,                     'foo', 'right value';
-is $headers->authorization('foo')->authorization,     'foo', 'right value';
-is $headers->connection('foo')->connection,           'foo', 'right value';
-is $headers->cache_control('foo')->cache_control,     'foo', 'right value';
+is $headers->access_control_allow_origin('foo')->access_control_allow_origin,
+  'foo', 'right value';
+is $headers->allow('foo')->allow,                 'foo', 'right value';
+is $headers->authorization('foo')->authorization, 'foo', 'right value';
+is $headers->connection('foo')->connection,       'foo', 'right value';
+is $headers->cache_control('foo')->cache_control, 'foo', 'right value';
 is $headers->content_disposition('foo')->content_disposition, 'foo',
   'right value';
 is $headers->content_encoding('foo')->content_encoding,   'foo', 'right value';
+is $headers->content_language('foo')->content_language,   'foo', 'right value';
 is $headers->content_length('foo')->content_length,       'foo', 'right value';
+is $headers->content_location('foo')->content_location,   'foo', 'right value';
 is $headers->content_range('foo')->content_range,         'foo', 'right value';
 is $headers->content_type('foo')->content_type,           'foo', 'right value';
 is $headers->cookie('foo')->cookie,                       'foo', 'right value';
@@ -86,9 +90,11 @@ is $headers->sec_websocket_protocol('foo')->sec_websocket_protocol, 'foo',
   'right value';
 is $headers->sec_websocket_version('foo')->sec_websocket_version, 'foo',
   'right value';
-is $headers->server('foo')->server,                       'foo', 'right value';
-is $headers->set_cookie('foo')->set_cookie,               'foo', 'right value';
-is $headers->status('foo')->status,                       'foo', 'right value';
+is $headers->server('foo')->server,         'foo', 'right value';
+is $headers->set_cookie('foo')->set_cookie, 'foo', 'right value';
+is $headers->status('foo')->status,         'foo', 'right value';
+is $headers->strict_transport_security('foo')->strict_transport_security,
+  'foo', 'right value';
 is $headers->te('foo')->te,                               'foo', 'right value';
 is $headers->trailer('foo')->trailer,                     'foo', 'right value';
 is $headers->transfer_encoding('foo')->transfer_encoding, 'foo', 'right value';
@@ -116,26 +122,11 @@ is $clone->expect,   'nothing',      'right value';
 $clone = Mojo::Headers->new->add(Foo => [qw(bar baz)])->clone;
 is_deeply $clone->to_hash(1)->{Foo}, [[qw(bar baz)]], 'right structure';
 
-# Multiline values
-$headers = Mojo::Headers->new;
-$headers->header('X-Test', [23, 24], 'single line', [25, 26]);
-is $headers->to_string,
-    "X-Test: 23\x0d\x0a 24\x0d\x0a"
-  . "X-Test: single line\x0d\x0a"
-  . "X-Test: 25\x0d\x0a 26", 'right format';
-my @array = $headers->header('X-Test');
-is_deeply \@array, [[23, 24], ['single line'], [25, 26]], 'right structure';
-is_deeply $headers->to_hash(1),
-  {'X-Test' => [[23, 24], ['single line'], [25, 26]]}, 'right structure';
-is_deeply $headers->to_hash, {'X-Test' => '23, 24, single line, 25, 26'},
-  'right structure';
-my $str = $headers->header('X-Test');
-is $str, "23, 24, single line, 25, 26", 'right format';
-
 # Parse headers
 $headers = Mojo::Headers->new;
 isa_ok $headers->parse(<<'EOF'), 'Mojo::Headers', 'right return value';
 Content-Type: text/plain
+o: x
 Expect: 100-continue
 Cache-control: public
 Expires: Thu, 01 Dec 1994 16:00:00 GMT
@@ -146,6 +137,7 @@ is $headers->content_type,  'text/plain', 'right value';
 is $headers->expect,        '100-continue', 'right value';
 is $headers->cache_control, 'public', 'right value';
 is $headers->expires,       'Thu, 01 Dec 1994 16:00:00 GMT', 'right value';
+is $headers->header('o'), 'x', 'right value';
 
 # Parse multiline headers
 $headers = Mojo::Headers->new;
@@ -154,23 +146,27 @@ Foo: first
  second
  third
 Content-Type: text/plain
+Foo Bar: baz
 Foo: first again
-  second again
+  second ":again"
 
 EOF
 ok $headers->is_finished, 'parser is finished';
-my $multi = [['first', 'second', 'third'], ['first again', 'second again']];
-$hash = {'Content-Type' => [['text/plain']], Foo => $multi};
+$hash = {
+  'Content-Type' => ['text/plain'],
+  Foo            => ['first second third', 'first again second ":again"'],
+  'Foo Bar'      => ['baz']
+};
 is_deeply $headers->to_hash(1), $hash, 'right structure';
-is_deeply [$headers->header('Foo')], $multi, 'right structure';
-is scalar $headers->header('Foo'),
-  'first, second, third, first again, second again', 'right value';
+is $headers->header('Foo'), 'first second third, first again second ":again"',
+  'right value';
 $headers = Mojo::Headers->new->parse($headers->to_string . "\x0d\x0a\x0d\x0a");
 ok $headers->is_finished, 'parser is finished';
 is_deeply $headers->to_hash(1), $hash, 'successful roundtrip';
 $hash = {
   'Content-Type' => 'text/plain',
-  Foo            => 'first, second, third, first again, second again'
+  Foo            => 'first second third, first again second ":again"',
+  'Foo Bar'      => 'baz'
 };
 is_deeply $headers->to_hash, $hash, 'right structure';
 
@@ -196,23 +192,24 @@ $headers->append(Vary => 'Accept-Encoding');
 is $headers->vary, 'Accept, Accept-Encoding', 'right value';
 $headers = Mojo::Headers->new;
 $headers->add(Vary => 'Accept', 'Accept-Encoding');
-is_deeply $headers->to_hash(1), {Vary => [['Accept'], ['Accept-Encoding']]},
+is_deeply $headers->to_hash(1), {Vary => ['Accept', 'Accept-Encoding']},
   'right structure';
 $headers->append(Vary => 'Accept-Language');
 is_deeply $headers->to_hash(1),
-  {Vary => [['Accept, Accept-Encoding, Accept-Language']]}, 'right structure';
+  {Vary => ['Accept, Accept-Encoding, Accept-Language']}, 'right structure';
 
-# Multiline
+# Multiple headers with the same name
 $headers = Mojo::Headers->new;
-$headers->from_hash(
-  {'X-Test' => [[23, 24], ['single line'], [25, 26]], 'X-Test2' => 'foo'});
+$headers->from_hash({'X-Test' => [23, 24], 'X-Test2' => 'foo'});
 $hash = $headers->to_hash;
-is $hash->{'X-Test'}, '23, 24, single line, 25, 26', 'right value';
-is $hash->{'X-Test2'}, 'foo', 'right value';
+is $hash->{'X-Test'},  '23, 24', 'right value';
+is $hash->{'X-Test2'}, 'foo',    'right value';
 $hash = $headers->to_hash(1);
-is_deeply $hash->{'X-Test'}, [[23, 24], ['single line'], [25, 26]],
+is_deeply $hash->{'X-Test'}, [23, 24], 'right structure';
+is_deeply $hash->{'X-Test2'}, ['foo'], 'right structure';
+$headers = Mojo::Headers->new->parse($headers->to_string . "\x0d\x0a\x0d\x0a");
+is_deeply $headers->to_hash(1), {'X-Test' => [23, 24], 'X-Test2' => ['foo']},
   'right structure';
-is_deeply $hash->{'X-Test2'}, [['foo']], 'right structure';
 
 # Headers in chunks
 $headers = Mojo::Headers->new;

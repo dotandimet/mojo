@@ -1,9 +1,6 @@
 use Mojo::Base -strict;
 
-BEGIN {
-  $ENV{MOJO_NO_IPV6} = 1;
-  $ENV{MOJO_REACTOR} = 'Mojo::Reactor::Poll';
-}
+BEGIN { $ENV{MOJO_REACTOR} = 'Mojo::Reactor::Poll' }
 
 use Test::More;
 use Mojo::IOLoop;
@@ -15,23 +12,23 @@ use Mojolicious::Lite;
 app->log->level('fatal');
 
 get '/' => sub {
-  my $self = shift;
-  my $rel  = $self->req->url;
-  my $abs  = $rel->to_abs;
-  $self->render(text => "Hello World! $rel $abs");
+  my $c   = shift;
+  my $rel = $c->req->url;
+  my $abs = $rel->to_abs;
+  $c->render(text => "Hello World! $rel $abs");
 };
 
 get '/proxy' => sub {
-  my $self = shift;
-  $self->render(text => $self->req->url);
+  my $c = shift;
+  $c->render(text => $c->req->url);
 };
 
 websocket '/test' => sub {
-  my $self = shift;
-  $self->on(
+  my $c = shift;
+  $c->on(
     message => sub {
-      my ($self, $msg) = @_;
-      $self->send("${msg}test2");
+      my ($c, $msg) = @_;
+      $c->send("${msg}test2");
     }
   );
 };
@@ -39,19 +36,18 @@ websocket '/test' => sub {
 # HTTP server for testing
 my $ua = Mojo::UserAgent->new(ioloop => Mojo::IOLoop->singleton);
 my $daemon = Mojo::Server::Daemon->new(app => app, silent => 1);
-my $port = Mojo::IOLoop->new->generate_port;
-$daemon->listen(["http://127.0.0.1:$port"])->start;
+$daemon->listen(['http://127.0.0.1'])->start;
+my $port = Mojo::IOLoop->acceptor($daemon->acceptors->[0])->port;
 
 # CONNECT proxy server for testing
-my $proxy = Mojo::IOLoop->generate_port;
 my (%buffer, $connected, $read, $sent);
 my $nf
   = "HTTP/1.1 404 NOT FOUND\x0d\x0a"
   . "Content-Length: 0\x0d\x0a"
   . "Connection: close\x0d\x0a\x0d\x0a";
-my $ok = "HTTP/1.1 200 OK\x0d\x0aConnection: keep-alive\x0d\x0a\x0d\x0a";
-Mojo::IOLoop->server(
-  {address => '127.0.0.1', port => $proxy} => sub {
+my $ok = "HTTP/1.0 201 BAR\x0d\x0aX-Something: unimportant\x0d\x0a\x0d\x0a";
+my $id = Mojo::IOLoop->server(
+  {address => '127.0.0.1'} => sub {
     my ($loop, $stream, $client) = @_;
 
     # Connection to client
@@ -119,22 +115,23 @@ Mojo::IOLoop->server(
     );
   }
 );
+my $proxy = Mojo::IOLoop->acceptor($id)->port;
 
 # Normal non-blocking request
 my $result;
 $ua->get(
-  "http://localhost:$port/" => sub {
+  "http://127.0.0.1:$port/" => sub {
     $result = pop->res->body;
     Mojo::IOLoop->stop;
   }
 );
 Mojo::IOLoop->start;
-is $result, "Hello World! / http://localhost:$port/", 'right content';
+is $result, "Hello World! / http://127.0.0.1:$port/", 'right content';
 
 # Normal WebSocket
 $result = undef;
 $ua->websocket(
-  "ws://localhost:$port/test" => sub {
+  "ws://127.0.0.1:$port/test" => sub {
     my ($ua, $tx) = @_;
     $tx->on(finish => sub { Mojo::IOLoop->stop });
     $tx->on(
@@ -151,7 +148,7 @@ Mojo::IOLoop->start;
 is $result, 'test1test2', 'right result';
 
 # Non-blocking proxy request
-$ua->proxy->http("http://localhost:$port");
+$ua->proxy->http("http://127.0.0.1:$port");
 my $kept_alive;
 $result = undef;
 $ua->get(
@@ -169,7 +166,7 @@ is $result, 'http://example.com/proxy', 'right content';
 # Kept alive proxy WebSocket
 ($kept_alive, $result) = ();
 $ua->websocket(
-  "ws://localhost:$port/test" => sub {
+  "ws://127.0.0.1:$port/test" => sub {
     my ($ua, $tx) = @_;
     $kept_alive = $tx->kept_alive;
     $tx->on(finish => sub { Mojo::IOLoop->stop });
@@ -194,10 +191,10 @@ is $tx->res->body, 'http://example.com/proxy', 'right content';
 
 # Proxy WebSocket
 $ua = Mojo::UserAgent->new;
-$ua->proxy->http("http://localhost:$proxy");
+$ua->proxy->http("http://127.0.0.1:$proxy");
 $result = undef;
 $ua->websocket(
-  "ws://localhost:$port/test" => sub {
+  "ws://127.0.0.1:$port/test" => sub {
     my ($ua, $tx) = @_;
     $tx->on(finish => sub { Mojo::IOLoop->stop });
     $tx->on(
@@ -211,17 +208,17 @@ $ua->websocket(
   }
 );
 Mojo::IOLoop->start;
-is $connected, "localhost:$port", 'connected';
+is $connected, "127.0.0.1:$port", 'connected';
 is $result,    'test1test2',      'right result';
 ok $read > 25, 'read enough';
 ok $sent > 25, 'sent enough';
 
 # Proxy WebSocket with bad target
-$ua->proxy->http("http://localhost:$proxy");
+$ua->proxy->http("http://127.0.0.1:$proxy");
 my $port2 = $port + 1;
 my ($success, $err);
 $ua->websocket(
-  "ws://localhost:$port2/test" => sub {
+  "ws://127.0.0.1:$port2/test" => sub {
     my ($ua, $tx) = @_;
     $success = $tx->success;
     $err     = $tx->error;
@@ -230,6 +227,6 @@ $ua->websocket(
 );
 Mojo::IOLoop->start;
 ok !$success, 'no success';
-is $err, 'Proxy connection failed', 'right message';
+is $err->{message}, 'Proxy connection failed', 'right message';
 
 done_testing();

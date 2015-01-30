@@ -1,7 +1,9 @@
 use Mojo::Base -strict;
 
 use Test::More;
-use File::Spec::Functions qw(catfile splitdir);
+use Cwd 'abs_path';
+use File::Basename 'dirname';
+use File::Spec::Functions 'catfile';
 use File::Temp 'tempdir';
 use FindBin;
 use Mojo::ByteStream 'b';
@@ -101,18 +103,17 @@ ok !ref $stream->to_string, 'nested bytestream stringified';
 
 # split
 $stream = b('1,2,3,4,5');
-is_deeply [$stream->split(',')->each],   [1, 2, 3, 4, 5], 'right elements';
-is_deeply [$stream->split(qr/,/)->each], [1, 2, 3, 4, 5], 'right elements';
-is_deeply [b('54321')->split('')->each], [5, 4, 3, 2, 1], 'right elements';
-is_deeply [b('')->split('')->each],    [], 'no elements';
-is_deeply [b('')->split(',')->each],   [], 'no elements';
-is_deeply [b('')->split(qr/,/)->each], [], 'no elements';
+is_deeply $stream->split(',')->to_array,   [1, 2, 3, 4, 5], 'right elements';
+is_deeply $stream->split(qr/,/)->to_array, [1, 2, 3, 4, 5], 'right elements';
+is_deeply b('54321')->split('')->to_array, [5, 4, 3, 2, 1], 'right elements';
+is_deeply b('')->split('')->to_array,    [], 'no elements';
+is_deeply b('')->split(',')->to_array,   [], 'no elements';
+is_deeply b('')->split(qr/,/)->to_array, [], 'no elements';
 $stream = b('1/2/3');
 is $stream->split('/')->map(sub { $_->quote })->join(', '), '"1", "2", "3"',
   'right result';
 is $stream->split('/')->map(sub { shift->quote })->join(', '),
   '"1", "2", "3"', 'right result';
-is $stream->split('/')->quote->join(', '), '"1", "2", "3"', 'right result';
 
 # length
 is b('foo bar baz')->size, 11, 'size is 11';
@@ -139,7 +140,7 @@ b('te', 'st')->say($handle);
 is $buffer, "test\n123\n\"123\"\n", 'right output';
 
 # slurp
-my $file = catfile splitdir($FindBin::Bin), qw(templates exception.mt);
+my $file = abs_path catfile(dirname(__FILE__), 'templates', 'exception.mt');
 $stream = b($file)->slurp;
 is $stream, "test\n% die;\n123\n", 'right content';
 $stream = b($file)->slurp->split("\n")->grep(qr/die/)->join;
@@ -150,5 +151,8 @@ my $dir = tempdir CLEANUP => 1;
 $file = catfile $dir, 'test.txt';
 is b("just\nworks!")->spurt($file)->quote, qq{"just\nworks!"}, 'right result';
 is b($file)->slurp, "just\nworks!", 'successful roundtrip';
+
+# term_escape
+is b("\t\b\r\n\f")->term_escape, "\\x09\\x08\\x0d\n\\x0c", 'right result';
 
 done_testing();

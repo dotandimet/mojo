@@ -1,7 +1,5 @@
 use Mojo::Base -strict;
 
-BEGIN { $ENV{MOJO_NO_IPV6} = 1 }
-
 use Test::More;
 
 plan skip_all => 'set TEST_EV to enable this test (developer only!)'
@@ -32,12 +30,8 @@ Mojo::IOLoop->one_tick;
 ok time < ($time + 10), 'stopped automatically';
 
 # Listen
-my $port   = Mojo::IOLoop->generate_port;
-my $listen = IO::Socket::INET->new(
-  Listen    => 5,
-  LocalAddr => '127.0.0.1',
-  LocalPort => $port
-);
+my $listen = IO::Socket::INET->new(Listen => 5, LocalAddr => '127.0.0.1');
+my $port = $listen->sockport;
 my ($readable, $writable);
 $reactor->io($listen => sub { pop() ? $writable++ : $readable++ })
   ->watch($listen, 0, 0)->watch($listen, 1, 1);
@@ -126,32 +120,40 @@ ok $readable, 'handle is readable again';
 ok $writable, 'handle is writable again';
 ok !$timer, 'timer was not triggered';
 ok $recurring, 'recurring was triggered again';
-($readable, $writable, $timer, $recurring) = ();
-$reactor->timer(0.025 => sub { shift->stop });
-$reactor->start;
-ok $readable, 'handle is readable again';
-ok $writable, 'handle is writable again';
-ok !$timer, 'timer was not triggered';
-ok $recurring, 'recurring was triggered again';
 $reactor->remove($id);
 ($readable, $writable, $timer, $recurring) = ();
-is $reactor->next_tick(sub { shift->stop }), undef, 'returned undef';
+$reactor->timer(0.025 => sub { shift->stop });
 $reactor->start;
 ok $readable, 'handle is readable again';
 ok $writable, 'handle is writable again';
 ok !$timer,     'timer was not triggered';
 ok !$recurring, 'recurring was not triggered again';
+($readable, $writable, $timer, $recurring) = ();
+$id = $reactor->recurring(0 => sub { $recurring++ });
+is $reactor->next_tick(sub { shift->stop }), undef, 'returned undef';
+$reactor->start;
+ok $readable, 'handle is readable again';
+ok $writable, 'handle is writable again';
+ok !$timer, 'timer was not triggered';
+ok $recurring, 'recurring was triggered again';
 
 # Reset
-$reactor->remove($id);
-$reactor->remove($server);
-($readable, $writable) = ();
+$reactor->reset;
+($readable, $writable, $recurring) = ();
 $reactor->timer(0.025 => sub { shift->stop });
 $reactor->start;
-ok !$readable, 'io event was not triggered again';
-ok !$writable, 'io event was not triggered again';
+ok !$readable,  'io event was not triggered again';
+ok !$writable,  'io event was not triggered again';
+ok !$recurring, 'recurring was not triggered again';
 my $reactor2 = Mojo::Reactor::EV->new;
 is ref $reactor2, 'Mojo::Reactor::Poll', 'right object';
+
+# Reset while watchers are active
+$writable = undef;
+$reactor->io($_ => sub { ++$writable and shift->reset })->watch($_, 0, 1)
+  for $client, $server;
+$reactor->start;
+is $writable, 1, 'only one handle was writable';
 
 # Concurrent reactors
 $timer = 0;
@@ -236,37 +238,38 @@ is(Mojo::Reactor->detect, 'Mojo::Reactor::Test', 'right class');
 $ENV{MOJO_REACTOR} = 'Mojo::Reactor::EV';
 is ref Mojo::IOLoop->singleton->reactor, 'Mojo::Reactor::EV', 'right object';
 ok !Mojo::IOLoop->is_running, 'loop is not running';
-$port = Mojo::IOLoop->generate_port;
-my ($server_err, $server_running, $client_err, $client_running);
-$server = $client = '';
-Mojo::IOLoop->server(
-  {address => '127.0.0.1', port => $port} => sub {
+my ($buffer, $server_err, $server_running, $client_err, $client_running);
+$id = Mojo::IOLoop->server(
+  {address => '127.0.0.1'} => sub {
     my ($loop, $stream) = @_;
     $stream->write('test' => sub { shift->write('321') });
-    $stream->on(read => sub { $server .= pop });
     $server_running = Mojo::IOLoop->is_running;
     eval { Mojo::IOLoop->start };
     $server_err = $@;
   }
 );
+$port = Mojo::IOLoop->acceptor($id)->port;
 Mojo::IOLoop->client(
   {port => $port} => sub {
     my ($loop, $err, $stream) = @_;
-    $stream->write('tset' => sub { shift->write('123') });
-    $stream->on(read => sub { $client .= pop });
+    $stream->on(
+      read => sub {
+        my ($stream, $chunk) = @_;
+        $buffer .= $chunk;
+        return unless $buffer eq 'test321';
+        EV::break(EV::BREAK_ALL());
+      }
+    );
     $client_running = Mojo::IOLoop->is_running;
     eval { Mojo::IOLoop->start };
     $client_err = $@;
   }
 );
-Mojo::IOLoop->timer(1 => sub { EV::break(EV::BREAK_ALL()) });
 EV::run();
 ok !Mojo::IOLoop->is_running, 'loop is not running';
 like $server_err, qr/^Mojo::IOLoop already running/, 'right error';
 like $client_err, qr/^Mojo::IOLoop already running/, 'right error';
 ok $server_running, 'loop is running';
 ok $client_running, 'loop is running';
-is $server,         'tset123', 'right content';
-is $client,         'test321', 'right content';
 
 done_testing();

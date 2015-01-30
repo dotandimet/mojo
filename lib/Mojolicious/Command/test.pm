@@ -1,33 +1,21 @@
 package Mojolicious::Command::test;
 use Mojo::Base 'Mojolicious::Command';
 
-use Cwd 'realpath';
-use FindBin;
-use File::Spec::Functions qw(abs2rel catdir splitdir);
 use Getopt::Long qw(GetOptionsFromArray :config no_auto_abbrev no_ignore_case);
-use Mojo::Home;
 
-has description => 'Run tests.';
+has description => 'Run tests';
 has usage => sub { shift->extract_usage };
 
 sub run {
   my ($self, @args) = @_;
 
-  GetOptionsFromArray \@args, 'v|verbose' => sub { $ENV{HARNESS_VERBOSE} = 1 };
+  GetOptionsFromArray \@args, 'v|verbose' => \$ENV{HARNESS_VERBOSE};
 
-  unless (@args) {
-    my @base = splitdir(abs2rel $FindBin::Bin);
-
-    # "./t"
-    my $path = catdir @base, 't';
-
-    # "../t"
-    $path = catdir @base, '..', 't' unless -d $path;
-    die "Can't find test directory.\n" unless -d $path;
-
-    my $home = Mojo::Home->new($path);
-    /\.t$/ and push @args, $home->rel_file($_) for @{$home->list_files};
-    say "Running tests from '", realpath($path), "'.";
+  if (!@args && (my $home = $self->app->home)) {
+    die "Can't find test directory.\n" unless -d $home->rel_dir('t');
+    my $files = $home->list_files('t');
+    /\.t$/ and push @args, $home->rel_file("t/$_") for @$files;
+    say qq{Running tests from "}, $home->rel_dir('t') . '".';
   }
 
   $ENV{HARNESS_OPTIONS} //= 'c';
@@ -47,12 +35,12 @@ Mojolicious::Command::test - Test command
 
   Usage: APPLICATION test [OPTIONS] [TESTS]
 
-    ./myapp.pl test -v
+    ./myapp.pl test
     ./myapp.pl test t/foo.t
-    ./myapp.pl test t/foo/*.t
+    ./myapp.pl test -v t/foo/*.t
 
   Options:
-    -v, --verbose   Print verbose debug information to STDERR.
+    -v, --verbose   Print verbose debug information to STDERR
 
 =head1 DESCRIPTION
 
@@ -72,14 +60,14 @@ L<Mojolicious::Command> and implements the following new ones.
 =head2 description
 
   my $description = $test->description;
-  $test           = $test->description('Foo!');
+  $test           = $test->description('Foo');
 
 Short description of this command, used for the command list.
 
 =head2 usage
 
   my $usage = $test->usage;
-  $test     = $test->usage('Foo!');
+  $test     = $test->usage('Foo');
 
 Usage information for this command, used for the help screen.
 

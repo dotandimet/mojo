@@ -13,26 +13,21 @@ has charset => 'UTF-8';
 sub canonicalize {
   my $self = shift;
 
-  my @parts;
-  for my $part (@{$self->parts}) {
-
-    # ".."
-    if ($part eq '..') {
-      (@parts && $parts[-1] ne '..') ? pop @parts : push @parts, '..';
-    }
-
-    # Something else than "."
-    elsif ($part ne '.' && $part ne '') { push @parts, $part }
+  my $parts = $self->parts;
+  for (my $i = 0; $i <= $#$parts;) {
+    if ($parts->[$i] eq '.' || $parts->[$i] eq '') { splice @$parts, $i, 1 }
+    elsif ($i < 1 || $parts->[$i] ne '..' || $parts->[$i - 1] eq '..') { $i++ }
+    else { splice @$parts, --$i, 2 }
   }
-  $self->trailing_slash(undef) unless @parts;
 
-  return $self->parts(\@parts);
+  return @$parts ? $self : $self->trailing_slash(undef);
 }
 
 sub clone {
   my $self = shift;
 
-  my $clone = $self->new->charset($self->charset);
+  my $clone = $self->new;
+  if (exists $self->{charset}) { $clone->{charset} = $self->{charset} }
   if (my $parts = $self->{parts}) {
     $clone->{$_} = $self->{$_} for qw(leading_slash trailing_slash);
     $clone->{parts} = [@$parts];
@@ -42,10 +37,7 @@ sub clone {
   return $clone;
 }
 
-sub contains {
-  my ($self, $path) = @_;
-  return $path eq '/' || $self->to_route =~ m!^\Q$path\E(?:/|$)!;
-}
+sub contains { $_[1] eq '/' || $_[0]->to_route =~ m!^\Q$_[1]\E(?:/|$)! }
 
 sub leading_slash { shift->_parse(leading_slash => @_) }
 
@@ -86,8 +78,7 @@ sub to_dir {
 
 sub to_route {
   my $clone = shift->clone;
-  my $route = join '/', @{$clone->parts};
-  return "/$route" . ($clone->trailing_slash ? '/' : '');
+  return '/' . join '/', @{$clone->parts}, $clone->trailing_slash ? '' : ();
 }
 
 sub to_string {
@@ -216,11 +207,17 @@ Check if path contains given prefix.
 Path has a leading slash. Note that this method will normalize the path and
 that C<%2F> will be treated as C</> for security reasons.
 
+  # "/foo/bar"
+  Mojo::Path->new('foo/bar')->leading_slash(1);
+
+  # "foo/bar"
+  Mojo::Path->new('/foo/bar')->leading_slash(0);
+
 =head2 merge
 
   $path = $path->merge('/foo/bar');
   $path = $path->merge('foo/bar');
-  $path = $path->merge(Mojo::Path->new('foo/bar'));
+  $path = $path->merge(Mojo::Path->new);
 
 Merge paths. Note that this method will normalize both paths if necessary and
 that C<%2F> will be treated as C</> for security reasons.
@@ -309,6 +306,12 @@ Turn path into a string.
 
 Path has a trailing slash. Note that this method will normalize the path and
 that C<%2F> will be treated as C</> for security reasons.
+
+  # "/foo/bar/"
+  Mojo::Path->new('/foo/bar')->trailing_slash(1);
+
+  # "/foo/bar"
+  Mojo::Path->new('/foo/bar/')->trailing_slash(0);
 
 =head1 OPERATORS
 

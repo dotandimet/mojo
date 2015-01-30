@@ -1,7 +1,4 @@
-use FindBin;
-use lib "$FindBin::Bin/../lib";
 use Mojo::Base -strict;
-
 use Mojo::IOLoop;
 
 # Minimal ioloop example demonstrating how to cheat at HTTP benchmarks :)
@@ -17,7 +14,7 @@ Mojo::IOLoop->server(
         # Append chunk to buffer
         $buffer{$id} .= $chunk;
 
-        # Check if we got start line and headers (no body support)
+        # Check if we got start-line and headers (no body support)
         if (index($buffer{$id}, "\x0d\x0a\x0d\x0a") >= 0) {
 
           # Clean buffer
@@ -32,15 +29,16 @@ Mojo::IOLoop->server(
     );
     $stream->on(close => sub { delete $buffer{$id} });
   }
-) or die "Couldn't create listen socket!\n";
+);
 
 print <<'EOF';
 Starting server on port 8080.
-Try something like "wrk -c 100 -d 10s http://127.0.0.1:8080/" for testing.
+For testing use something like "wrk -c 100 -d 10s http://127.0.0.1:8080/".
 On a MacBook Air this results in about 18k req/s.
 EOF
 
 # Start event loop
+local $SIG{INT} = local $SIG{TERM} = sub { Mojo::IOLoop->stop };
 Mojo::IOLoop->start;
 
 1;

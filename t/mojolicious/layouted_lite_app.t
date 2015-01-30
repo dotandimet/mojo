@@ -1,9 +1,6 @@
 use Mojo::Base -strict;
 
-BEGIN {
-  $ENV{MOJO_NO_IPV6} = 1;
-  $ENV{MOJO_REACTOR} = 'Mojo::Reactor::Poll';
-}
+BEGIN { $ENV{MOJO_REACTOR} = 'Mojo::Reactor::Poll' }
 
 use Test::More;
 
@@ -52,8 +49,8 @@ get '/double_inheritance' =>
 get '/triple_inheritance';
 
 get '/nested-includes' => sub {
-  my $self = shift;
-  $self->render(
+  my $c = shift;
+  $c->render(
     template => 'nested-includes',
     layout   => 'layout',
     handler  => 'ep'
@@ -61,32 +58,32 @@ get '/nested-includes' => sub {
 };
 
 get '/localized/include' => sub {
-  my $self = shift;
-  $self->render('localized', test => 'foo', reverse => 1);
+  my $c = shift;
+  $c->render('localized', test => 'foo', reverse => 1);
 };
 
 get '/plain/reverse' => {text => 'Hello!', format => 'foo', reverse => 1};
 
 get '/outerlayout' => sub {
-  my $self = shift;
-  $self->render(template => 'outerlayout', layout => 'layout');
+  my $c = shift;
+  $c->render(template => 'outerlayout', layout => 'layout');
 };
 
 get '/outerextends' => sub {
-  my $self = shift;
-  $self->render(template => 'outerlayout', extends => 'layouts/layout');
+  my $c = shift;
+  $c->render(template => 'outerlayout', extends => 'layouts/layout');
 };
 
 get '/outerlayouttwo' => {layout => 'layout'} => sub {
-  my $self = shift;
-  is($self->stash->{layout}, 'layout', 'right value');
-  $self->render(handler => 'ep');
-  is($self->stash->{layout}, 'layout', 'right value');
+  my $c = shift;
+  is($c->stash->{layout}, 'layout', 'right value');
+  $c->render(handler => 'ep');
+  is($c->stash->{layout}, 'layout', 'right value');
 } => 'outerlayout';
 
 get '/outerinnerlayout' => sub {
-  my $self = shift;
-  $self->render(
+  my $c = shift;
+  $c->render(
     template => 'outerinnerlayout',
     layout   => 'layout',
     handler  => 'ep'
@@ -94,8 +91,8 @@ get '/outerinnerlayout' => sub {
 };
 
 get '/withblocklayout' => sub {
-  my $self = shift;
-  $self->render(template => 'index', layout => 'with_block', handler => 'epl');
+  my $c = shift;
+  $c->render(template => 'index', layout => 'with_block', handler => 'epl');
 };
 
 get '/content_for';
@@ -107,9 +104,9 @@ get '/inline/again' => {inline => 0};
 get '/data' => {data => 0};
 
 get '/variants' => {layout => 'variants'} => sub {
-  my $self = shift;
-  $self->stash->{variant} = $self->param('device');
-  $self->render('variants');
+  my $c = shift;
+  $c->stash->{variant} = $c->param('device');
+  $c->render('variants');
 };
 
 my $t = Test::Mojo->new;
@@ -193,12 +190,12 @@ $t->get_ok('/triple_inheritance')->status_is(200)
 $t->get_ok('/plugin_with_template')->status_is(200)
   ->content_is("layout_with_template\nwith template\n\n");
 
-# Nested partial templates
+# Nested included templates
 $t->get_ok('/nested-includes')->status_is(200)
   ->header_is(Server => 'Mojolicious (Perl)')
   ->content_is("layouted Nested <Hello>\n[\n  1,\n  2\n]\nthere<br>!\n\n\n\n");
 
-# Partial template with localized stash values
+# Included template with localized stash values
 $t->get_ok('/localized/include')->status_is(200)
   ->header_is(Server => 'Mojolicious (Perl)')
   ->content_type_is('text/html;charset=UTF-8')
@@ -224,7 +221,7 @@ $t->get_ok('/outerlayouttwo')->status_is(200)
   ->header_is(Server => 'Mojolicious (Perl)')
   ->content_is("layouted <Hello>\n[\n  1,\n  2\n]\nthere<br>!\n\n\n");
 
-# Partial template with layout
+# Included template with layout
 $t->get_ok('/outerinnerlayout')->status_is(200)
   ->header_is(Server => 'Mojolicious (Perl)')
   ->content_is("layouted Hello\nlayouted [\n  1,\n  2\n]\nthere<br>!\n\n\n\n");
@@ -353,10 +350,10 @@ Nested <%= include 'outerlayout' %>
 @@ localized.html.ep
 % extends 'localized1';
 <%= $test %>
-<%= include 'localized_partial', test => 321, extends => 'localized2' %>
+<%= include 'localized_include', test => 321, extends => 'localized2' %>
 <%= $test %>
 
-@@ localized_partial.html.ep
+@@ localized_include.html.ep
 <%= $test %>
 
 @@ localized1.html.ep
@@ -367,7 +364,7 @@ localized2 <%= content %>
 
 @@ outerlayout.html.ep
 %= c(qw(> o l l e H <))->reverse->join
-<%= $self->render('outermenu', partial => 1) %>
+<%= $c->render_to_string('outermenu') %>
 
 @@ outermenu.html.ep
 % stash test => 'there';

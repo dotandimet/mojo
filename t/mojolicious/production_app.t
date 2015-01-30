@@ -2,7 +2,6 @@ use Mojo::Base -strict;
 
 BEGIN {
   $ENV{MOJO_MODE}    = 'production';
-  $ENV{MOJO_NO_IPV6} = 1;
   $ENV{MOJO_REACTOR} = 'Mojo::Reactor::Poll';
 }
 
@@ -33,7 +32,12 @@ is_deeply $t->app->commands->namespaces,
 is $t->app, $t->app->commands->app, 'applications are equal';
 is $t->app->static->file('hello.txt')->slurp,
   "Hello Mojo from a static file!\n", 'right content';
+is $t->app->static->file('does_not_exist.html'), undef, 'no file';
 is $t->app->moniker, 'mojolicious_test', 'right moniker';
+
+# Default namespaces
+is_deeply $t->app->routes->namespaces,
+  ['MojoliciousTest::Controller', 'MojoliciousTest'], 'right namespaces';
 
 # Plugin::Test::SomePlugin2::register (security violation)
 $t->get_ok('/plugin-test-some_plugin2/register')->status_isnt(500)

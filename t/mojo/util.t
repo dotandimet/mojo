@@ -4,8 +4,11 @@ use FindBin;
 use lib "$FindBin::Bin/lib";
 
 use Test::More;
-use File::Spec::Functions qw(catfile splitdir);
+use Cwd 'abs_path';
+use File::Basename 'dirname';
+use File::Spec::Functions 'catfile';
 use File::Temp 'tempdir';
+use Mojo::ByteStream 'b';
 use Mojo::DeprecationTest;
 
 use Mojo::Util
@@ -13,8 +16,8 @@ use Mojo::Util
   qw(decode dumper encode hmac_sha1_sum html_unescape md5_bytes md5_sum),
   qw(monkey_patch punycode_decode punycode_encode quote secure_compare),
   qw(secure_compare sha1_bytes sha1_sum slurp split_header spurt squish),
-  qw(steady_time tablify trim unindent unquote url_escape url_unescape),
-  qw(xml_escape xor_encode);
+  qw(steady_time tablify term_escape trim unindent unquote url_escape),
+  qw(url_unescape xml_escape xor_encode xss_escape);
 
 # camelize
 is camelize('foo_bar_baz'), 'FooBarBaz', 'right camelized result';
@@ -67,8 +70,8 @@ is_deeply split_header('f "o" o , ba  r'),
   'right result';
 is_deeply split_header('foo="b,; a\" r\"\\\\"'), [['foo', 'b,; a" r"\\']],
   'right result';
-is_deeply split_header('foo = "b a\" r\"\\\\"'), [['foo', 'b a" r"\\']],
-  'right result';
+is_deeply split_header('foo = "b a\" r\"\\\\"; bar="ba z"'),
+  [['foo', 'b a" r"\\', 'bar', 'ba z']], 'right result';
 my $header = q{</foo/bar>; rel="x"; t*=UTF-8'de'a%20b};
 my $tree = [['</foo/bar>', undef, 'rel', 'x', 't*', 'UTF-8\'de\'a%20b']];
 is_deeply split_header($header), $tree, 'right result';
@@ -192,6 +195,10 @@ is xml_escape('привет'), 'привет', 'right XML escaped result';
 # xml_escape (UTF-8)
 is xml_escape('привет<foo>'), 'привет&lt;foo&gt;',
   'right XML escaped result';
+
+# xss_escape
+is xss_escape('<p>'), '&lt;p&gt;', 'right XSS escaped result';
+is xss_escape(b('<p>')), '<p>', 'right XSS escaped result';
 
 # punycode_encode
 is punycode_encode('bücher'), 'bcher-kva', 'right punycode encoded result';
@@ -371,7 +378,7 @@ is xor_encode('hello', '123456789'), "\x59\x57\x5f\x58\x5a", 'right result';
 is xor_encode("\x59\x57\x5f\x58\x5a", '123456789'), 'hello', 'right result';
 
 # slurp
-is slurp(catfile(splitdir($FindBin::Bin), qw(templates exception.mt))),
+is slurp(abs_path catfile(dirname(__FILE__), 'templates', 'exception.mt')),
   "test\n% die;\n123\n", 'right content';
 
 # spurt
@@ -381,7 +388,7 @@ spurt "just\nworks!", $file;
 is slurp($file), "just\nworks!", 'successful roundtrip';
 
 # steady_time
-like steady_time, qr/^\d+\.\d+$/, 'high resolution time';
+like steady_time, qr/^[\d.]+$/, 'high resolution time';
 
 # monkey_patch
 {
@@ -408,6 +415,16 @@ is MojoMonkeyTest::yin(), 'yin', 'right result';
 ok !!MojoMonkeyTest->can('yang'), 'function "yang" exists';
 is MojoMonkeyTest::yang(), 'yang', 'right result';
 
+# monkey_patch (with name)
+SKIP: {
+  skip 'Sub::Util required!', 2
+    unless eval { require Sub::Util; !!Sub::Util->can('set_subname') };
+  is Sub::Util::subname(MojoMonkeyTest->can('foo')), 'MojoMonkeyTest::foo',
+    'right name';
+  is Sub::Util::subname(MojoMonkeyTest->can('bar')), 'MojoMonkeyTest::bar',
+    'right name';
+}
+
 # tablify
 is tablify([["f\r\no o\r\n", 'bar']]),     "fo o  bar\n",      'right result';
 is tablify([["  foo",        '  b a r']]), "  foo    b a r\n", 'right result';
@@ -416,6 +433,8 @@ is tablify([['foo', 'yada'], ['yada', 'yada']]), "foo   yada\nyada  yada\n",
   'right result';
 is tablify([['foo', 'bar', 'baz'], ['yada', 'yada', 'yada']]),
   "foo   bar   baz\nyada  yada  yada\n", 'right result';
+is tablify([['a', '', 'b'], ['c', '', 'd']]), "a    b\nc    d\n",
+  'right result';
 
 # deprecated
 {
@@ -434,5 +453,11 @@ is tablify([['foo', 'bar', 'baz'], ['yada', 'yada', 'yada']]),
 
 # dumper
 is dumper([1, 2]), "[\n  1,\n  2\n]\n", 'right result';
+
+# term_escape
+is term_escape("Accept: */*\x0d\x0a"), "Accept: */*\\x0d\x0a", 'right result';
+is term_escape("\t\b\r\n\f"), "\\x09\\x08\\x0d\n\\x0c", 'right result';
+is term_escape("\x00\x09\x0b\x1f\x7f\x80\x9f"),
+  '\x00\x09\x0b\x1f\x7f\x80\x9f', 'right result';
 
 done_testing();

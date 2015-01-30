@@ -64,8 +64,6 @@ is $res->code(428)->default_message, 'Precondition Required', 'right message';
 is $res->code(429)->default_message, 'Too Many Requests',     'right message';
 is $res->code(431)->default_message, 'Request Header Fields Too Large',
   'right message';
-is $res->code(451)->default_message, 'Unavailable For Legal Reasons',
-  'right message';
 is $res->code(500)->default_message, 'Internal Server Error', 'right message';
 is $res->code(501)->default_message, 'Not Implemented',       'right message';
 is $res->code(502)->default_message, 'Bad Gateway',           'right message';
@@ -82,6 +80,7 @@ is $res->code(509)->default_message, 'Bandwidth Limit Exceeded',
 is $res->code(510)->default_message, 'Not Extended', 'right message';
 is $res->code(511)->default_message, 'Network Authentication Required',
   'right message';
+is $res->default_message(100), 'Continue', 'right message';
 
 # Status code ranges
 ok $res->code(200)->is_status_class(200), 'is in range';
@@ -110,7 +109,7 @@ is $res->code(400)->default_message, 'Bad Request', 'right default message';
 $res = Mojo::Message::Response->new;
 is $res->code(1)->default_message, '', 'empty default message';
 
-# Parse HTTP 1.1 response start line, no headers and body
+# Parse HTTP 1.1 response start-line, no headers and body
 $res = Mojo::Message::Response->new;
 $res->parse("HTTP/1.1 200 OK\x0d\x0a\x0d\x0a");
 ok $res->is_finished, 'response is finished';
@@ -118,7 +117,7 @@ is $res->code,        200, 'right status';
 is $res->message,     'OK', 'right message';
 is $res->version,     '1.1', 'right version';
 
-# Parse HTTP 1.1 response start line, no headers and body (small chunks)
+# Parse HTTP 1.1 response start-line, no headers and body (small chunks)
 $res = Mojo::Message::Response->new;
 $res->parse('H');
 ok !$res->is_finished, 'response is not finished';
@@ -162,7 +161,7 @@ is $res->code,        200, 'right status';
 is $res->message,     'OK', 'right message';
 is $res->version,     '1.1', 'right version';
 
-# Parse HTTP 1.1 response start line, no headers and body (no message)
+# Parse HTTP 1.1 response start-line, no headers and body (no message)
 $res = Mojo::Message::Response->new;
 $res->parse("HTTP/1.1 200\x0d\x0a\x0d\x0a");
 ok $res->is_finished, 'response is finished';
@@ -170,7 +169,7 @@ is $res->code,        200, 'right status';
 is $res->message,     undef, 'no message';
 is $res->version,     '1.1', 'right version';
 
-# Parse HTTP 1.0 response start line and headers but no body
+# Parse HTTP 1.0 response start-line and headers but no body
 $res = Mojo::Message::Response->new;
 $res->parse("HTTP/1.0 404 Damn it\x0d\x0a");
 $res->parse("Content-Type: text/plain\x0d\x0a");
@@ -196,6 +195,19 @@ is $res->headers->content_type,   'text/plain', 'right "Content-Type" value';
 is $res->headers->content_length, 27,           'right "Content-Length" value';
 is $res->body, "Hello World!\n1234\nlalalala\n", 'right content';
 
+# Parse full HTTP 1.0 response (keep-alive)
+$res = Mojo::Message::Response->new;
+$res->parse("HTTP/1.0 500 Internal Server Error\x0d\x0a");
+$res->parse("Connection: keep-alive\x0d\x0a\x0d\x0a");
+$res->parse("HTTP/1.0 200 OK\x0d\x0a\x0d\x0a");
+ok $res->is_finished, 'response is finished';
+is $res->code,        500, 'right status';
+is $res->message,     'Internal Server Error', 'right message';
+is $res->version,     '1.0', 'right version';
+is $res->body,        '', 'no content';
+is $res->content->leftovers, "HTTP/1.0 200 OK\x0d\x0a\x0d\x0a",
+  'next response in leftovers';
+
 # Parse full HTTP 1.0 response (no limit)
 {
   local $ENV{MOJO_MAX_MESSAGE_SIZE} = 0;
@@ -214,6 +226,12 @@ is $res->body, "Hello World!\n1234\nlalalala\n", 'right content';
   is $res->headers->content_length, 27, 'right "Content-Length" value';
   is $res->body, "Hello World!\n1234\nlalalala\n", 'right content';
 }
+
+# Parse broken start-line
+$res = Mojo::Message::Response->new;
+$res->parse("12345\x0d\x0a");
+ok $res->is_finished, 'response is finished';
+is $res->error->{message}, 'Bad response start-line', 'right error';
 
 # Parse full HTTP 1.0 response (missing Content-Length)
 $res = Mojo::Message::Response->new;
@@ -253,12 +271,26 @@ $res->parse("Hello World!\n1234\nlalalala\n");
 ok !$res->is_finished, 'response is not finished';
 ok !$res->is_empty,    'response is not empty';
 ok !$res->content->skip_body, 'body has not been skipped';
+ok $res->content->relaxed, 'relaxed response';
 is $res->code,    500,                     'right status';
 is $res->message, 'Internal Server Error', 'right message';
 is $res->version, '1.1',                   'right version';
 is $res->headers->content_type,   'text/plain', 'right "Content-Type" value';
 is $res->headers->content_length, undef,        'no "Content-Length" value';
 is $res->body, "Hello World!\n1234\nlalalala\n", 'right content';
+
+# Parse full HTTP 1.1 response (broken Content-Length)
+$res = Mojo::Message::Response->new;
+$res->parse("HTTP/1.1 200 OK\x0d\x0a");
+$res->parse("Content-Length: 123test\x0d\x0a\x0d\x0a");
+$res->parse('Hello World!');
+ok $res->is_finished, 'response is finished';
+is $res->code,        200, 'right status';
+is $res->message,     'OK', 'right message';
+is $res->version,     '1.1', 'right version';
+is $res->headers->content_length, '123test', 'right "Content-Length" value';
+is $res->body, '', 'no content';
+is $res->content->leftovers, 'Hello World!', 'content in leftovers';
 
 # Parse full HTTP 1.1 response (100 Continue)
 $res = Mojo::Message::Response->new;
@@ -336,14 +368,15 @@ is $res->headers->content_length, undef, 'right "Content-Length" value';
   $res->parse("HTTP/1.1 200 OK\x0d\x0a");
   $res->parse("Content-Type: text/plain\x0d\x0a");
   $res->parse("Transfer-Encoding: chunked\x0d\x0a\x0d\x0a");
+  ok !$res->is_limit_exceeded, 'limit is not exceeded';
   $res->parse('a' x 1000);
   ok $res->is_finished, 'response is finished';
   ok $res->content->is_finished, 'content is finished';
-  is(($res->error)[0], 'Maximum buffer size exceeded', 'right error');
-  is(($res->error)[1], 400, 'right status');
-  is $res->code,    200,   'right status';
-  is $res->message, 'OK',  'right message';
-  is $res->version, '1.1', 'right version';
+  is $res->error->{message}, 'Maximum buffer size exceeded', 'right error';
+  ok $res->is_limit_exceeded, 'limit is not exceeded';
+  is $res->code,              200, 'right status';
+  is $res->message,           'OK', 'right message';
+  is $res->version,           '1.1', 'right version';
   is $res->headers->content_type, 'text/plain', 'right "Content-Type" value';
 }
 
@@ -361,8 +394,7 @@ is $res->headers->content_length, undef, 'right "Content-Length" value';
   ok $res->content->is_limit_exceeded, 'limit is exceeded';
   ok $res->is_finished, 'response is finished';
   ok $res->content->is_finished, 'content is finished';
-  is(($res->error)[0], 'Maximum buffer size exceeded', 'right error');
-  is(($res->error)[1], 400, 'right status');
+  is $res->error->{message}, 'Maximum buffer size exceeded', 'right error';
   is $res->code,    200,   'right status';
   is $res->message, 'OK',  'right message';
   is $res->version, '1.1', 'right version';
@@ -385,8 +417,7 @@ is $res->headers->content_length, undef, 'right "Content-Length" value';
   ok $res->content->is_limit_exceeded, 'limit is exceeded';
   ok $res->is_finished, 'response is finished';
   ok $res->content->is_finished, 'content is finished';
-  is(($res->error)[0], 'Maximum buffer size exceeded', 'right error');
-  is(($res->error)[1], 400, 'right status');
+  is $res->error->{message}, 'Maximum buffer size exceeded', 'right error';
   is $res->code,    200,   'right status';
   is $res->message, 'OK',  'right message';
   is $res->version, '1.1', 'right version';
@@ -445,7 +476,7 @@ isa_ok $res->content->parts->[2], 'Mojo::Content::Single', 'right part';
 is $res->content->parts->[0]->asset->slurp, "hallo welt test123\n",
   'right content';
 
-# Parse HTTP 1.1 chunked multipart response (at once)
+# Parse HTTP 1.1 chunked multipart response with leftovers (at once)
 $res = Mojo::Message::Response->new;
 my $multipart
   = "HTTP/1.1 200 OK\x0d\x0a"
@@ -467,7 +498,8 @@ my $multipart
   . "print \"Hello World :)\\n\"\n"
   . "\x0d\x0a------------0xKhTmLbOuNdA"
   . "r\x0d\x0a3\x0d\x0aY--\x0d\x0a"
-  . "0\x0d\x0a\x0d\x0a";
+  . "0\x0d\x0a\x0d\x0a"
+  . "HTTP/1.0 200 OK\x0d\x0a\x0d\x0a";
 $res->parse($multipart);
 ok $res->is_finished, 'response is finished';
 is $res->code,        200, 'right status';
@@ -489,6 +521,8 @@ isa_ok $res->upload('upload')->asset, 'Mojo::Asset::Memory', 'right file';
 is $res->upload('upload')->asset->size, 69, 'right size';
 is $res->content->parts->[2]->headers->content_type,
   'application/octet-stream', 'right "Content-Type" value';
+is $res->content->leftovers, "HTTP/1.0 200 OK\x0d\x0a\x0d\x0a",
+  'next response in leftovers';
 
 # Parse HTTP 1.1 chunked multipart response (in multiple small chunks)
 $res = Mojo::Message::Response->new;
@@ -627,7 +661,7 @@ is $res->headers->transfer_encoding, undef, 'no "Transfer-Encoding" value';
 is $res->headers->content_encoding,  undef, 'no "Content-Encoding" value';
 is $res->body, $uncompressed, 'right content';
 
-# Build HTTP 1.1 response start line with minimal headers
+# Build HTTP 1.1 response start-line with minimal headers
 $res = Mojo::Message::Response->new;
 $res->code(404);
 $res->headers->date('Sun, 17 Aug 2008 16:27:35 GMT');
@@ -639,7 +673,7 @@ is $res->version,     '1.1', 'right version';
 is $res->headers->date, 'Sun, 17 Aug 2008 16:27:35 GMT', 'right "Date" value';
 is $res->headers->content_length, 0, 'right "Content-Length" value';
 
-# Build HTTP 1.1 response start line with minimal headers (strange message)
+# Build HTTP 1.1 response start-line with minimal headers (strange message)
 $res = Mojo::Message::Response->new;
 $res->code(404);
 $res->message('Looks-0k!@ ;\':" #$%^<>,.\\o/ &*()');
@@ -652,7 +686,7 @@ is $res->version,     '1.1', 'right version';
 is $res->headers->date, 'Sun, 17 Aug 2008 16:27:35 GMT', 'right "Date" value';
 is $res->headers->content_length, 0, 'right "Content-Length" value';
 
-# Build HTTP 1.1 response start line and header
+# Build HTTP 1.1 response start-line and header
 $res = Mojo::Message::Response->new;
 $res->code(200);
 $res->headers->connection('keep-alive');
@@ -700,7 +734,7 @@ $res->body("Hello World!\n");
 ok !$state,    'no state';
 ok !$progress, 'no progress';
 ok !$finished, 'not finished';
-ok $res->build_start_line, 'built start line';
+ok $res->build_start_line, 'built start-line';
 is $state, 'start_line', 'made progress on start_line';
 ok $progress, 'made progress';
 $progress = 0;
@@ -736,7 +770,7 @@ is $res->code,        200, 'right status';
 is $res->message,     'OK', 'right message';
 is $res->version,     '1.1', 'right version';
 is $res->headers->date, 'Sun, 17 Aug 2008 16:27:35 GMT', 'right "Date" value';
-is $res->headers->content_length, '108', 'right "Content-Length" value';
+is $res->headers->content_length, '110', 'right "Content-Length" value';
 is $res->headers->content_type, 'multipart/mixed; boundary=7am1X',
   'right "Content-Type" value';
 is $res->content->parts->[0]->asset->slurp, 'Hallo Welt lalalalalala!',
@@ -1003,23 +1037,23 @@ is $res->version,     '1.1', 'right version';
 is $res->dom->at('p')->text,     'foo', 'right value';
 is $res->dom->at('p > a')->text, 'bar', 'right value';
 is $res->dom('p')->first->text, 'foo', 'right value';
-is_deeply [$res->dom('p > a')->pluck('text')->each], [qw(bar baz)],
+is_deeply $res->dom('p > a')->map('text')->to_array, [qw(bar baz)],
   'right values';
-my @text = $res->dom('a')->pluck(content => 'yada')->first->root->find('p > a')
-  ->pluck('text')->each;
+my @text = $res->dom('a')->map(content => 'yada')->first->root->find('p > a')
+  ->map('text')->each;
 is_deeply \@text, [qw(yada yada)], 'right values';
-is_deeply [$res->dom('p > a')->pluck('text')->each], [qw(yada yada)],
+is_deeply $res->dom('p > a')->map('text')->to_array, [qw(yada yada)],
   'right values';
 @text
-  = $res->dom->find('a')->pluck(content => 'test')->first->root->find('p > a')
-  ->pluck('text')->each;
+  = $res->dom->find('a')->map(content => 'test')->first->root->find('p > a')
+  ->map('text')->each;
 is_deeply \@text, [qw(test test)], 'right values';
-is_deeply [$res->dom->find('p > a')->pluck('text')->each], [qw(test test)],
+is_deeply $res->dom->find('p > a')->map('text')->to_array, [qw(test test)],
   'right values';
 
 # Build DOM from response with charset
 $res = Mojo::Message::Response->new;
-$res->parse("HTTP/1.1 200 OK\x0a");
+$res->parse("HTTP/1.0 200 OK\x0a");
 $res->parse(
   "Content-Type: application/atom+xml; charset=UTF-8; type=feed\x0a");
 $res->parse("\x0a");

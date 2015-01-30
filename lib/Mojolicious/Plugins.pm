@@ -7,7 +7,7 @@ has namespaces => sub { ['Mojolicious::Plugin'] };
 
 sub emit_hook {
   my $self = shift;
-  $_->(@_) for @{$self->subscribers(shift)};
+  for my $cb (@{$self->subscribers(shift)}) { $cb->(@_) }
   return $self;
 }
 
@@ -25,22 +25,17 @@ sub emit_chain {
 
 sub emit_hook_reverse {
   my $self = shift;
-  $_->(@_) for reverse @{$self->subscribers(shift)};
+  for my $cb (reverse @{$self->subscribers(shift)}) { $cb->(@_) }
   return $self;
 }
 
 sub load_plugin {
   my ($self, $name) = @_;
 
-  # Try all namespaces
-  my $class = $name =~ /^[a-z]/ ? camelize($name) : $name;
-  for my $ns (@{$self->namespaces}) {
-    my $module = "${ns}::$class";
-    return $module->new if _load($module);
-  }
-
-  # Full module name
-  return $name->new if _load($name);
+  # Try all namespaces and full module name
+  my $suffix = $name =~ /^[a-z]/ ? camelize($name) : $name;
+  my @classes = map {"${_}::$suffix"} @{$self->namespaces};
+  for my $class (@classes, $name) { return $class->new if _load($class) }
 
   # Not found
   die qq{Plugin "$name" missing, maybe you need to install it?\n};
@@ -52,10 +47,9 @@ sub register_plugin {
 
 sub _load {
   my $module = shift;
-  if (my $e = Mojo::Loader->new->load($module)) {
-    ref $e ? die $e : return undef;
-  }
-  return $module->isa('Mojolicious::Plugin');
+  return $module->isa('Mojolicious::Plugin')
+    unless my $e = Mojo::Loader->new->load($module);
+  ref $e ? die $e : return undef;
 }
 
 1;
@@ -70,7 +64,7 @@ Mojolicious::Plugins - Plugin manager
 
   use Mojolicious::Plugins;
 
-  my $plugins = Mojolicious::Plugin->new;
+  my $plugins = Mojolicious::Plugins->new;
   push @{$plugins->namespaces}, 'MyApp::Plugin';
 
 =head1 DESCRIPTION

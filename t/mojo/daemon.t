@@ -1,18 +1,36 @@
 use Mojo::Base -strict;
 
-BEGIN {
-  $ENV{MOJO_NO_IPV6} = 1;
-  $ENV{MOJO_REACTOR} = 'Mojo::Reactor::Poll';
-}
+BEGIN { $ENV{MOJO_REACTOR} = 'Mojo::Reactor::Poll' }
 
 use Test::More;
+use Cwd 'abs_path';
 use File::Spec::Functions 'catdir';
+use FindBin;
 use Mojo;
 use Mojo::IOLoop;
 use Mojo::Log;
 use Mojo::Server::Daemon;
 use Mojo::UserAgent;
 use Mojolicious;
+
+package TestApp;
+use Mojo::Base 'Mojo';
+
+sub handler {
+  my ($self, $tx) = @_;
+  $tx->res->code(200);
+  $tx->res->body('Hello TestApp!');
+  $tx->resume;
+}
+
+package main;
+
+# Minimal application
+my $ua = Mojo::UserAgent->new;
+$ua->server->app(TestApp->new);
+my $tx = $ua->get('/');
+is $tx->res->code, 200, 'right status';
+is $tx->res->body, 'Hello TestApp!', 'right content';
 
 # Timeout
 {
@@ -27,15 +45,22 @@ use Mojolicious;
 {
   is_deeply(Mojo::Server::Daemon->new->listen,
     ['http://*:3000'], 'right value');
-  local $ENV{MOJO_LISTEN} = 'http://localhost:8080';
+  local $ENV{MOJO_LISTEN} = 'http://127.0.0.1:8080';
   is_deeply(Mojo::Server::Daemon->new->listen,
-    ['http://localhost:8080'], 'right value');
+    ['http://127.0.0.1:8080'], 'right value');
   $ENV{MOJO_LISTEN} = 'http://*:80,https://*:443';
   is_deeply(
     Mojo::Server::Daemon->new->listen,
     ['http://*:80', 'https://*:443'],
     'right value'
   );
+}
+
+# Reverse proxy
+{
+  ok !Mojo::Server::Daemon->new->reverse_proxy, 'no reverse proxy';
+  local $ENV{MOJO_REVERSE_PROXY} = 1;
+  ok !!Mojo::Server::Daemon->new->reverse_proxy, 'reverse proxy';
 }
 
 # Optional home detection
@@ -54,12 +79,29 @@ is $app->config({test => 23})->config->{test}, 23, 'right value';
 is_deeply $app->config, {foo => 'bar', baz => 'yada', test => 23},
   'right value';
 
+# Script name
+my $path = "$FindBin::Bin/lib/../lib/myapp.pl";
+is(Mojo::Server::Daemon->new->load_app($path)->config('script'),
+  abs_path($path), 'right script name');
+
+# Load broken app
+eval {
+  Mojo::Server::Daemon->new->load_app(
+    "$FindBin::Bin/lib/Mojo/LoaderException.pm");
+};
+like $@, qr/^Can't load application/, 'right error';
+
+# Load missing application class
+eval { Mojo::Server::Daemon->new->build_app('Mojo::DoesNotExist') };
+like $@, qr/^Can't find application class "Mojo::DoesNotExist" in \@INC/,
+  'right error';
+
 # Transaction
 isa_ok $app->build_tx, 'Mojo::Transaction::HTTP', 'right class';
 
 # Fresh application
 $app = Mojolicious->new;
-my $ua = Mojo::UserAgent->new(ioloop => Mojo::IOLoop->singleton);
+$ua = Mojo::UserAgent->new(ioloop => Mojo::IOLoop->singleton);
 is $ua->server->app($app)->app->moniker, 'mojolicious', 'right moniker';
 
 # Silence
@@ -98,7 +140,7 @@ $app->routes->post(
 $app->routes->any('/*whatever' => {text => 'Whatever!'});
 
 # Normal request
-my $tx = $ua->get('/normal/');
+$tx = $ua->get('/normal/');
 ok $tx->keep_alive, 'will be kept alive';
 is $tx->res->code, 200,         'right status';
 is $tx->res->body, 'Whatever!', 'right content';
@@ -143,12 +185,13 @@ is $tx->res->code, 200,         'right status';
 is $tx->res->body, 'Whatever!', 'right content';
 
 # Concurrent requests
-my $delay = Mojo::IOLoop->delay;
+my ($tx2, $tx3);
+my $delay = Mojo::IOLoop->delay(sub { (undef, $tx, $tx2, $tx3) = @_ });
 $ua->get('/concurrent1/' => $delay->begin);
 $ua->post('/concurrent2/' => {Expect => 'fun'} => 'bar baz foo' x 128 =>
     $delay->begin);
 $ua->get('/concurrent3/' => $delay->begin);
-($tx, my $tx2, my $tx3) = $delay->wait;
+$delay->wait;
 ok $tx->is_finished, 'transaction is finished';
 is $tx->res->body, 'Whatever!', 'right content';
 ok !$tx->error, 'no error';
@@ -164,32 +207,29 @@ my %params;
 for my $i (1 .. 10) { $params{"test$i"} = $i }
 my $result = '';
 for my $key (sort keys %params) { $result .= $params{$key} }
-my ($code, $body);
-my $port = $ua->server->url->port;
-$tx = $ua->post("http://127.0.0.1:$port/chunked" => form => \%params);
+$tx = $ua->post('/chunked' => form => \%params);
 is $tx->res->code, 200, 'right status';
 is $tx->res->body, $result, 'right content';
 
 # Upload
-($code, $body) = ();
-$tx = $ua->post(
-  "http://127.0.0.1:$port/upload" => form => {file => {content => $result}});
+$tx = $ua->post('/upload' => form => {file => {content => $result}});
 is $tx->res->code, 200, 'right status';
 is $tx->res->body, $result, 'right content';
 ok $tx->local_address, 'has local address';
 ok $tx->local_port > 0, 'has local port';
-ok $tx->remote_address, 'has local address';
-ok $tx->remote_port > 0, 'has local port';
+ok $tx->original_remote_address, 'has original remote address';
+ok $tx->remote_address,          'has remote address';
+ok $tx->remote_port > 0, 'has remote port';
 ok $local_address, 'has local address';
 ok $local_port > 0, 'has local port';
-ok $remote_address, 'has local address';
-ok $remote_port > 0, 'has local port';
+ok $remote_address, 'has remote address';
+ok $remote_port > 0, 'has remote port';
 
 # Pipelined
-$port = Mojo::IOLoop->generate_port;
-my $daemon = Mojo::Server::Daemon->new(listen => ["http://127.0.0.1:$port"],
-  silent => 1);
+my $daemon
+  = Mojo::Server::Daemon->new(listen => ['http://127.0.0.1'], silent => 1);
 $daemon->start;
+my $port = Mojo::IOLoop->acceptor($daemon->acceptors->[0])->port;
 is $daemon->app->moniker, 'HelloWorld', 'right moniker';
 my $buffer = '';
 my $id;
@@ -214,31 +254,25 @@ Mojo::IOLoop->start;
 like $buffer, qr/Mojo$/, 'transactions were pipelined';
 
 # Throttling
-$port   = Mojo::IOLoop->generate_port;
 $daemon = Mojo::Server::Daemon->new(
   app    => $app,
-  listen => ["http://127.0.0.1:$port"],
+  listen => ['http://127.0.0.1'],
   silent => 1
 );
 is scalar @{$daemon->acceptors}, 0, 'no active acceptors';
-$daemon->start;
-is scalar @{$daemon->acceptors}, 1, 'one active acceptor';
-is $daemon->app->moniker, 'mojolicious', 'right moniker';
-$tx = $ua->get("http://127.0.0.1:$port/throttle1" => {Connection => 'close'});
-ok $tx->success, 'successful';
-is $tx->res->code, 200,         'right status';
-is $tx->res->body, 'Whatever!', 'right content';
-$daemon->stop;
-is scalar @{$daemon->acceptors}, 0, 'no active acceptors';
-$tx = $ua->inactivity_timeout(0.5)
-  ->get("http://127.0.0.1:$port/throttle2" => {Connection => 'close'});
-ok !$tx->success, 'not successful';
-is $tx->error, 'Inactivity timeout', 'right error';
-$daemon->start;
-$tx = $ua->inactivity_timeout(10)
-  ->get("http://127.0.0.1:$port/throttle3" => {Connection => 'close'});
-ok $tx->success, 'successful';
-is $tx->res->code, 200,         'right status';
-is $tx->res->body, 'Whatever!', 'right content';
+is scalar @{$daemon->start->acceptors}, 1, 'one active acceptor';
+$id = $daemon->acceptors->[0];
+ok !!Mojo::IOLoop->acceptor($id), 'acceptor has been added';
+is scalar @{$daemon->stop->acceptors}, 0, 'no active acceptors';
+ok !Mojo::IOLoop->acceptor($id), 'acceptor has been removed';
+is scalar @{$daemon->start->acceptors}, 1, 'one active acceptor';
+$id = $daemon->acceptors->[0];
+ok !!Mojo::IOLoop->acceptor($id), 'acceptor has been added';
+undef $daemon;
+ok !Mojo::IOLoop->acceptor($id), 'acceptor has been removed';
+
+# Abstract methods
+eval { Mojo::Server->run };
+like $@, qr/Method "run" not implemented by subclass/, 'right error';
 
 done_testing();

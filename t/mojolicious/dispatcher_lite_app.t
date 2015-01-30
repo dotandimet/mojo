@@ -1,9 +1,6 @@
 use Mojo::Base -strict;
 
-BEGIN {
-  $ENV{MOJO_NO_IPV6} = 1;
-  $ENV{MOJO_REACTOR} = 'Mojo::Reactor::Poll';
-}
+BEGIN { $ENV{MOJO_REACTOR} = 'Mojo::Reactor::Poll' }
 
 use Test::More;
 
@@ -52,7 +49,8 @@ hook before_dispatch => sub {
 # Custom dispatcher /custom
 hook before_dispatch => sub {
   my $c = shift;
-  $c->render(text => $c->param('a'), status => 205)
+  $c->render_maybe
+    or $c->render(text => $c->param('a'), status => 205)
     if $c->req->url->path->contains('/custom');
 };
 

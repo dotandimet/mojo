@@ -6,11 +6,10 @@ use Mojo::DOM;
 use Mojo::IOLoop;
 use Mojo::JSON qw(encode_json j);
 use Mojo::JSON::Pointer;
-use Mojo::UserAgent;
 use Mojo::Util qw(decode encode);
 use Scalar::Util 'weaken';
 
-has description => 'Perform HTTP request.';
+has description => 'Perform HTTP request';
 has usage => sub { shift->extract_usage };
 
 sub run {
@@ -29,12 +28,12 @@ sub run {
   my $selector = shift @args;
 
   # Parse header pairs
-  my %headers;
-  /^\s*([^:]+)\s*:\s*(.+)$/ and $headers{$1} = $2 for @headers;
+  my %headers = map { /^\s*([^:]+)\s*:\s*(.+)$/ ? ($1, $2) : () } @headers;
 
   # Detect proxy for absolute URLs
-  my $ua = Mojo::UserAgent->new(ioloop => Mojo::IOLoop->singleton);
-  $url !~ m!^/! ? $ua->proxy->detect : $ua->server->app($self->app);
+  my $ua = $self->app->ua->ioloop(Mojo::IOLoop->singleton);
+  $ua->server->ioloop(Mojo::IOLoop->singleton);
+  $ua->proxy->detect unless $url =~ m!^/!;
   $ua->max_redirects(10) if $redirect;
 
   my $buffer = '';
@@ -65,14 +64,13 @@ sub run {
   $verbose = 1 if $method eq 'HEAD';
   STDOUT->autoflush(1);
   my $tx = $ua->start($ua->build_tx($method, $url, \%headers, $content));
-  my ($err, $code) = $tx->error;
-  $url = encode 'UTF-8', $url;
-  warn qq{Problem loading URL "$url". ($err)\n} if $err && !$code;
+  my $err = $tx->error;
+  warn qq{Problem loading URL "@{[$tx->req->url]}": $err->{message}\n}
+    if $err && !$err->{code};
 
   # JSON Pointer
   return unless defined $selector;
-  my $type = $tx->res->headers->content_type // '';
-  return _json($buffer, $selector) if $type =~ /json/i;
+  return _json($buffer, $selector) if $selector eq '' || $selector =~ m!^/!;
 
   # Selector
   _select($buffer, $selector, $charset // $tx->res->content->charset, @args);
@@ -90,32 +88,31 @@ sub _say { length && say encode('UTF-8', $_) for @_ }
 sub _select {
   my ($buffer, $selector, $charset, @args) = @_;
 
+  # Keep a strong reference to the root
   $buffer = decode($charset, $buffer) // $buffer if $charset;
-  my $results = Mojo::DOM->new($buffer)->find($selector);
+  my $dom     = Mojo::DOM->new($buffer);
+  my $results = $dom->find($selector);
 
   while (defined(my $command = shift @args)) {
 
     # Number
-    ($results = [$results->[$command]])->[0] ? next : return
-      if $command =~ /^\d+$/;
+    ($results = $results->slice($command)) and next if $command =~ /^\d+$/;
 
     # Text
-    return _say(map { $_->text } @$results) if $command eq 'text';
+    return _say($results->map('text')->each) if $command eq 'text';
 
     # All text
-    return _say(map { $_->all_text } @$results) if $command eq 'all';
+    return _say($results->map('all_text')->each) if $command eq 'all';
 
     # Attribute
-    if ($command eq 'attr') {
-      return unless my $name = shift @args;
-      return _say(map { $_->attr->{$name} } @$results);
-    }
+    return _say($results->map(attr => $args[0] // '')->each)
+      if $command eq 'attr';
 
     # Unknown
     die qq{Unknown command "$command".\n};
   }
 
-  _say(@$results);
+  _say($results->each);
 }
 
 1;
@@ -131,10 +128,12 @@ Mojolicious::Command::get - Get command
   Usage: APPLICATION get [OPTIONS] URL [SELECTOR|JSON-POINTER] [COMMANDS]
 
     ./myapp.pl get /
+    ./myapp.pl get -H 'Accept: text/html' /hello.html 'head > title' text
+    ./myapp.pl get //sri:secr3t@/secrets.json /1/content
     mojo get mojolicio.us
     mojo get -v -r google.com
-    mojo get -v -H 'Host: mojolicious.org' -H 'DNT: 1' mojolicio.us
-    mojo get -M POST -c 'trololo' mojolicio.us
+    mojo get -v -H 'Host: mojolicious.org' -H 'Accept: */*' mojolicio.us
+    mojo get -M POST -H 'Content-Type: text/trololo' -c 'trololo' mojolicio.us
     mojo get mojolicio.us 'head > title' text
     mojo get mojolicio.us .footer all
     mojo get mojolicio.us a attr href
@@ -144,12 +143,12 @@ Mojolicious::Command::get - Get command
 
   Options:
     -C, --charset <charset>     Charset of HTML/XML content, defaults to auto
-                                detection.
-    -c, --content <content>     Content to send with request.
-    -H, --header <name:value>   Additional HTTP header.
-    -M, --method <method>       HTTP method to use, defaults to "GET".
-    -r, --redirect              Follow up to 10 redirects.
-    -v, --verbose               Print request and response headers to STDERR.
+                                detection
+    -c, --content <content>     Content to send with request
+    -H, --header <name:value>   Additional HTTP header
+    -M, --method <method>       HTTP method to use, defaults to "GET"
+    -r, --redirect              Follow up to 10 redirects
+    -v, --verbose               Print request and response headers to STDERR
 
 =head1 DESCRIPTION
 
@@ -170,14 +169,14 @@ applications.
 =head2 description
 
   my $description = $get->description;
-  $get            = $get->description('Foo!');
+  $get            = $get->description('Foo');
 
 Short description of this command, used for the command list.
 
 =head2 usage
 
   my $usage = $get->usage;
-  $get      = $get->usage('Foo!');
+  $get      = $get->usage('Foo');
 
 Usage information for this command, used for the help screen.
 

@@ -9,10 +9,15 @@ use Mojo::Asset::Memory;
 
 # File asset
 my $file = Mojo::Asset::File->new;
+is $file->size, 0, 'file is empty';
+is $file->mtime, (stat $file->handle)[9], 'right mtime';
+is $file->slurp, '', 'file is empty';
 $file->add_chunk('abc');
 is $file->contains('abc'), 0,  '"abc" at position 0';
 is $file->contains('bc'),  1,  '"bc" at position 1';
 is $file->contains('db'),  -1, 'does not contain "db"';
+is $file->size, 3, 'right size';
+is $file->mtime, (stat $file->handle)[9], 'right mtime';
 
 # Cleanup
 my $path = $file->path;
@@ -26,6 +31,11 @@ $mem->add_chunk('abc');
 is $mem->contains('abc'), 0,  '"abc" at position 0';
 is $mem->contains('bc'),  1,  '"bc" at position 1';
 is $mem->contains('db'),  -1, 'does not contain "db"';
+is $mem->size, 3, 'right size';
+ok $mem->mtime > (time - 100), 'right mtime';
+is $mem->mtime, Mojo::Asset::Memory->new->mtime, 'same mtime';
+my $mtime = $mem->mtime;
+is $mem->mtime($mtime + 23)->mtime, $mtime + 23, 'right mtime';
 
 # Empty file asset
 $file = Mojo::Asset::File->new;
@@ -214,11 +224,28 @@ $file = Mojo::Asset::File->new(cleanup => 0)->add_chunk('test');
 ok $file->is_file, 'stored in file';
 is $file->slurp,   'test', 'right content';
 is $file->size,    4, 'right size';
+is $file->mtime, (stat $file->handle)[9], 'right mtime';
 is $file->contains('es'), 1, '"es" at position 1';
 $path = $file->path;
 undef $file;
 ok -e $path, 'file exists';
 unlink $path;
 ok !-e $path, 'file has been cleaned up';
+
+# Abstract methods
+eval { Mojo::Asset->add_chunk };
+like $@, qr/Method "add_chunk" not implemented by subclass/, 'right error';
+eval { Mojo::Asset->contains };
+like $@, qr/Method "contains" not implemented by subclass/, 'right error';
+eval { Mojo::Asset->get_chunk };
+like $@, qr/Method "get_chunk" not implemented by subclass/, 'right error';
+eval { Mojo::Asset->move_to };
+like $@, qr/Method "move_to" not implemented by subclass/, 'right error';
+eval { Mojo::Asset->mtime };
+like $@, qr/Method "mtime" not implemented by subclass/, 'right error';
+eval { Mojo::Asset->size };
+like $@, qr/Method "size" not implemented by subclass/, 'right error';
+eval { Mojo::Asset->slurp };
+like $@, qr/Method "slurp" not implemented by subclass/, 'right error';
 
 done_testing();

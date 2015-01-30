@@ -3,16 +3,16 @@ use Mojo::Base 'Mojo::Server';
 
 use Mojo::IOLoop;
 use Mojo::URL;
+use Mojo::Util 'term_escape';
 use Scalar::Util 'weaken';
 
 use constant DEBUG => $ENV{MOJO_DAEMON_DEBUG} || 0;
 
 has acceptors => sub { [] };
-has [qw(backlog silent)];
+has [qw(backlog max_clients silent)];
 has inactivity_timeout => sub { $ENV{MOJO_INACTIVITY_TIMEOUT} // 15 };
 has ioloop => sub { Mojo::IOLoop->singleton };
 has listen => sub { [split ',', $ENV{MOJO_LISTEN} || 'http://*:3000'] };
-has max_clients  => 1000;
 has max_requests => 25;
 
 sub DESTROY {
@@ -40,7 +40,7 @@ sub start {
 
   # Start listening
   else { $self->_listen($_) for @{$self->listen} }
-  $loop->max_connections($self->max_clients);
+  if (my $max = $self->max_clients) { $loop->max_connections($max) }
 
   return $self;
 }
@@ -113,7 +113,7 @@ sub _finish {
   if (my $ws = $c->{tx} = delete $c->{ws}) {
 
     # Successful upgrade
-    if ($ws->res->code eq '101') {
+    if ($ws->res->code == 101) {
       weaken $self;
       $ws->on(resume => sub { $self->_write($id) });
     }
@@ -143,10 +143,10 @@ sub _listen {
   my $options = {
     address => $url->host,
     backlog => $self->backlog,
-    port    => $url->port,
-    reuse   => scalar $query->param('reuse'),
+    reuse   => $query->param('reuse')
   };
-  $options->{"tls_$_"} = scalar $query->param($_) for qw(ca cert ciphers key);
+  if (my $port = $url->port) { $options->{port} = $port }
+  $options->{"tls_$_"} = $query->param($_) for qw(ca cert ciphers key);
   my $verify = $query->param('verify');
   $options->{tls_verify} = hex $verify if defined $verify;
   delete $options->{address} if $options->{address} eq '*';
@@ -161,20 +161,20 @@ sub _listen {
       warn "-- Accept (@{[$stream->handle->peerhost]})\n" if DEBUG;
       $stream->timeout($self->inactivity_timeout);
 
-      $stream->on(close => sub { $self->_close($id) });
+      $stream->on(close => sub { $self && $self->_close($id) });
       $stream->on(error =>
           sub { $self && $self->app->log->error(pop) && $self->_close($id) });
       $stream->on(read => sub { $self->_read($id => pop) });
       $stream->on(timeout =>
-          sub { $self->app->log->debug('Inactivity timeout.') if $c->{tx} });
+          sub { $self->app->log->debug('Inactivity timeout') if $c->{tx} });
     }
   );
 
   return if $self->silent;
-  $self->app->log->info(qq{Listening at "$url".});
+  $self->app->log->info(qq{Listening at "$url"});
   $query->params([]);
   $url->host('127.0.0.1') if $url->host eq '*';
-  say "Server available at $url.";
+  say "Server available at $url";
 }
 
 sub _read {
@@ -183,7 +183,7 @@ sub _read {
   # Make sure we have a transaction and parse chunk
   return unless my $c = $self->{connections}{$id};
   my $tx = $c->{tx} ||= $self->_build_tx($id, $c);
-  warn "-- Server <<< Client (@{[$tx->req->url->to_abs]})\n$chunk\n" if DEBUG;
+  warn term_escape "-- Server <<< Client (@{[_url($tx)]})\n$chunk\n" if DEBUG;
   $tx->server_read($chunk);
 
   # Last keep-alive request or corrupted connection
@@ -201,19 +201,18 @@ sub _remove {
   $self->_close($id);
 }
 
+sub _url { shift->req->url->to_abs }
+
 sub _write {
   my ($self, $id) = @_;
 
-  # Not writing
+  # Get chunk and write
   return unless my $c  = $self->{connections}{$id};
   return unless my $tx = $c->{tx};
-  return unless $tx->is_writing;
-
-  # Get chunk and write
-  return if $c->{writing}++;
+  return if !$tx->is_writing || $c->{writing}++;
   my $chunk = $tx->server_write;
   delete $c->{writing};
-  warn "-- Server >>> Client (@{[$tx->req->url->to_abs]})\n$chunk\n" if DEBUG;
+  warn term_escape "-- Server >>> Client (@{[_url($tx)]})\n$chunk\n" if DEBUG;
   my $stream = $self->ioloop->stream($id)->write($chunk);
 
   # Finish or continue writing
@@ -265,15 +264,15 @@ Mojo::Server::Daemon - Non-blocking I/O HTTP and WebSocket server
 =head1 DESCRIPTION
 
 L<Mojo::Server::Daemon> is a full featured, highly portable non-blocking I/O
-HTTP and WebSocket server, with IPv6, TLS, Comet (long polling), keep-alive,
-connection pooling, timeout, cookie, multipart and multiple event loop
-support.
+HTTP and WebSocket server, with IPv6, TLS, Comet (long polling), keep-alive
+and multiple event loop support.
 
-For better scalability (epoll, kqueue) and to provide IPv6 as well as TLS
-support, the optional modules L<EV> (4.0+), L<IO::Socket::IP> (0.20+) and
-L<IO::Socket::SSL> (1.84+) will be used automatically by L<Mojo::IOLoop> if
-they are installed. Individual features can also be disabled with the
-C<MOJO_NO_IPV6> and C<MOJO_NO_TLS> environment variables.
+For better scalability (epoll, kqueue) and to provide non-blocking name
+resolution, SOCKS5 as well as TLS support, the optional modules L<EV> (4.0+),
+L<Net::DNS::Native> (0.15+), L<IO::Socket::Socks> (0.64+) and
+L<IO::Socket::SSL> (1.84+) will be used automatically if possible. Individual
+features can also be disabled with the C<MOJO_NO_NDN>, C<MOJO_NO_SOCKS> and
+C<MOJO_NO_TLS> environment variables.
 
 See L<Mojolicious::Guides::Cookbook/"DEPLOYMENT"> for more.
 
@@ -321,10 +320,11 @@ L<Mojo::IOLoop> singleton.
 =head2 listen
 
   my $listen = $daemon->listen;
-  $daemon    = $daemon->listen(['https://localhost:3000']);
+  $daemon    = $daemon->listen(['https://127.0.0.1:8080']);
 
 List of one or more locations to listen on, defaults to the value of the
-C<MOJO_LISTEN> environment variable or C<http://*:3000>.
+C<MOJO_LISTEN> environment variable or C<http://*:3000> (shortcut for
+C<http://0.0.0.0:3000>).
 
   # Listen on all IPv4 interfaces
   $daemon->listen(['http://*:3000']);
@@ -371,8 +371,7 @@ Path to the TLS cert file, defaults to a built-in test certificate.
 
   ciphers=AES128-GCM-SHA256:RC4:HIGH:!MD5:!aNULL:!EDH
 
-Cipher specification string, defaults to
-C<ECDHE-RSA-AES128-SHA256:AES128-GCM-SHA256:RC4:HIGH:!MD5:!aNULL:!EDH>.
+Cipher specification string.
 
 =item key
 
@@ -400,7 +399,8 @@ TLS verification mode, defaults to C<0x03>.
   my $max = $daemon->max_clients;
   $daemon = $daemon->max_clients(1000);
 
-Maximum number of concurrent client connections, defaults to C<1000>.
+Maximum number of concurrent client connections, passed along to
+L<Mojo::IOLoop/"max_connections">.
 
 =head2 max_requests
 
@@ -432,6 +432,10 @@ Run server.
   $daemon = $daemon->start;
 
 Start accepting connections.
+
+  # Listen on random port
+  my $id   = $daemon->listen(['http://127.0.0.1'])->start->acceptors->[0];
+  my $port = $daemon->ioloop->acceptor($id)->port;
 
 =head2 stop
 

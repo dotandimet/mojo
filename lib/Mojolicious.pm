@@ -2,9 +2,9 @@ package Mojolicious;
 use Mojo::Base 'Mojo';
 
 # "Fry: Shut up and take my money!"
-use Carp 'croak';
+use Carp ();
 use Mojo::Exception;
-use Mojo::Util 'decamelize';
+use Mojo::Util;
 use Mojolicious::Commands;
 use Mojolicious::Controller;
 use Mojolicious::Plugins;
@@ -14,17 +14,17 @@ use Mojolicious::Sessions;
 use Mojolicious::Static;
 use Mojolicious::Types;
 use Mojolicious::Validator;
-use Scalar::Util qw(blessed weaken);
-use Time::HiRes 'gettimeofday';
+use Scalar::Util ();
+use Time::HiRes  ();
 
 has commands => sub {
   my $commands = Mojolicious::Commands->new(app => shift);
-  weaken $commands->{app};
+  Scalar::Util::weaken $commands->{app};
   return $commands;
 };
 has controller_class => 'Mojolicious::Controller';
 has mode => sub { $ENV{MOJO_MODE} || $ENV{PLACK_ENV} || 'development' };
-has moniker  => sub { decamelize ref shift };
+has moniker  => sub { Mojo::Util::decamelize ref shift };
 has plugins  => sub { Mojolicious::Plugins->new };
 has renderer => sub { Mojolicious::Renderer->new };
 has routes   => sub { Mojolicious::Routes->new };
@@ -32,7 +32,7 @@ has secrets  => sub {
   my $self = shift;
 
   # Warn developers about insecure default
-  $self->log->debug('Your secret passphrase needs to be changed!!!');
+  $self->log->debug('Your secret passphrase needs to be changed');
 
   # Default to moniker
   return [$self->moniker];
@@ -42,23 +42,21 @@ has static    => sub { Mojolicious::Static->new };
 has types     => sub { Mojolicious::Types->new };
 has validator => sub { Mojolicious::Validator->new };
 
-our $CODENAME = 'Top Hat';
-our $VERSION  = '4.92';
+our $CODENAME = 'Tiger Face';
+our $VERSION  = '5.76';
 
 sub AUTOLOAD {
   my $self = shift;
 
-  my ($package, $method) = split /::(\w+)$/, our $AUTOLOAD;
-  croak "Undefined subroutine &${package}::$method called"
-    unless blessed $self && $self->isa(__PACKAGE__);
+  my ($package, $method) = our $AUTOLOAD =~ /^(.+)::(.+)$/;
+  Carp::croak "Undefined subroutine &${package}::$method called"
+    unless Scalar::Util::blessed $self && $self->isa(__PACKAGE__);
 
   # Call helper with fresh controller
-  croak qq{Can't locate object method "$method" via package "$package"}
-    unless my $helper = $self->renderer->helpers->{$method};
+  Carp::croak qq{Can't locate object method "$method" via package "$package"}
+    unless my $helper = $self->renderer->get_helper($method);
   return $self->build_controller->$helper(@_);
 }
-
-sub DESTROY { }
 
 sub build_controller {
   my ($self, $tx) = @_;
@@ -70,10 +68,11 @@ sub build_controller {
   $stash->{'mojo.secrets'} //= $self->secrets;
 
   # Build default controller
-  %$stash = (%$stash, %{$self->defaults});
+  my $defaults = $self->defaults;
+  @$stash{keys %$defaults} = values %$defaults;
   my $c
     = $self->controller_class->new(app => $self, stash => $stash, tx => $tx);
-  weaken $c->{app};
+  Scalar::Util::weaken $c->{app};
 
   return $c;
 }
@@ -85,18 +84,15 @@ sub build_tx {
   return $tx;
 }
 
-sub defaults { shift->_dict(defaults => @_) }
+sub defaults { Mojo::Util::_stash(defaults => @_) }
 
 sub dispatch {
   my ($self, $c) = @_;
 
-  # Prepare transaction
-  my $tx = $c->tx;
-  $tx->res->code(undef) if $tx->is_websocket;
-  $self->sessions->load($c);
   my $plugins = $self->plugins->emit_hook(before_dispatch => $c);
 
   # Try to find a static file
+  my $tx = $c->tx;
   $self->static->dispatch($c) and $plugins->emit_hook(after_static => $c)
     unless $tx->res->code;
 
@@ -106,17 +102,14 @@ sub dispatch {
     my $req    = $c->req;
     my $method = $req->method;
     my $path   = $req->url->path->to_abs_string;
-    $self->log->debug(qq{$method "$path".});
-    $stash->{'mojo.started'} = [gettimeofday];
+    $self->log->debug(qq{$method "$path"});
+    $stash->{'mojo.started'} = [Time::HiRes::gettimeofday];
   }
 
   # Routes
   $plugins->emit_hook(before_routes => $c);
-  my $res = $tx->res;
-  return if $res->code;
-  if (my $code = ($tx->req->error)[1]) { $res->code($code) }
-  elsif ($tx->is_websocket) { $res->code(426) }
-  $c->render_not_found unless $self->routes->dispatch($c) || $tx->res->code;
+  $c->helpers->reply->not_found
+    unless $tx->res->code || $self->routes->dispatch($c) || $tx->res->code;
 }
 
 sub handler {
@@ -130,18 +123,18 @@ sub handler {
 
   # Process with chain
   my $c = $self->build_controller(@_);
-  weaken $c->{tx};
+  Scalar::Util::weaken $c->{tx};
   $self->plugins->emit_chain(around_dispatch => $c);
 
   # Delayed response
-  $self->log->debug('Nothing has been rendered, expecting delayed response.')
+  $self->log->debug('Nothing has been rendered, expecting delayed response')
     unless $c->tx->is_writing;
 }
 
 sub helper {
   my ($self, $name, $cb) = @_;
   my $r = $self->renderer;
-  $self->log->debug(qq{Helper "$name" already exists, replacing.})
+  $self->log->debug(qq{Helper "$name" already exists, replacing})
     if exists $r->helpers->{$name};
   $r->add_helper($name => $cb);
 }
@@ -155,20 +148,20 @@ sub new {
   push @{$self->renderer->paths}, $home->rel_dir('templates');
   push @{$self->static->paths},   $home->rel_dir('public');
 
-  # Default to application namespace
-  my $r = $self->routes->namespaces([ref $self]);
+  # Default to controller and application namespace
+  my $r = $self->routes->namespaces(["@{[ref $self]}::Controller", ref $self]);
 
-  # Hide controller attributes/methods and "handler"
-  $r->hide(qw(app continue cookie finish flash handler match on param));
-  $r->hide(qw(redirect_to render render_exception render_later render_maybe));
-  $r->hide(qw(render_not_found render_static rendered req res respond_to));
-  $r->hide(qw(send session signed_cookie stash tx url_for validation write));
-  $r->hide(qw(write_chunk));
+  # Hide controller attributes/methods
+  $r->hide(qw(app continue cookie every_cookie every_param));
+  $r->hide(qw(every_signed_cookie finish flash helpers match on param));
+  $r->hide(qw(redirect_to render render_later render_maybe render_to_string));
+  $r->hide(qw(rendered req res respond_to send session signed_cookie stash));
+  $r->hide(qw(tx url_for validation write write_chunk));
 
-  # Check if we have a log directory
+  # Check if we have a log directory that is writable
   my $mode = $self->mode;
   $self->log->path($home->rel_file("log/$mode.log"))
-    if -w $home->rel_file('log');
+    if -d $home->rel_file('log') && -w _;
 
   $self->plugin($_)
     for qw(HeaderCondition DefaultHelpers TagHelpers EPLRenderer EPRenderer);
@@ -189,7 +182,11 @@ sub plugin {
   $self->plugins->register_plugin(shift, $self, @_);
 }
 
-sub start { shift->commands->run(@_ ? @_ : @ARGV) }
+sub start {
+  my $self = shift;
+  $_->_warmup for $self->static, $self->renderer;
+  return $self->commands->run(@_ ? @_ : @ARGV);
+}
 
 sub startup { }
 
@@ -197,7 +194,7 @@ sub _exception {
   my ($next, $c) = @_;
   local $SIG{__DIE__}
     = sub { ref $_[0] ? CORE::die($_[0]) : Mojo::Exception->throw(@_) };
-  $c->render_exception($@) unless eval { $next->(); 1 };
+  $c->helpers->reply->exception($@) unless eval { $next->(); 1 };
 }
 
 1;
@@ -221,7 +218,7 @@ Mojolicious - Real-time web framework
   }
 
   # Controller
-  package MyApp::Foo;
+  package MyApp::Controller::Foo;
   use Mojo::Base 'Mojolicious::Controller';
 
   # Action
@@ -250,7 +247,8 @@ parsed.
 
 This is a very powerful hook and should not be used lightly, it makes some
 rather advanced features such as upload progress bars possible. Note that this
-hook will not work for embedded applications. (Passed the transaction and
+hook will not work for embedded applications, because only the host
+application gets to build transactions. (Passed the transaction and
 application object)
 
 =head2 before_dispatch
@@ -326,10 +324,10 @@ current controller object and the render arguments)
 
 =head2 after_render
 
-Emitted after content has been generated by the renderer that is not partial.
-Note that this hook can trigger out of order due to its dynamic nature, and
-with embedded applications will only work for the application that is
-rendering.
+Emitted after content has been generated by the renderer that will be assigned
+to the response. Note that this hook can trigger out of order due to its
+dynamic nature, and with embedded applications will only work for the
+application that is rendering.
 
   $app->hook(after_render => sub {
     my ($c, $output, $format) = @_;
@@ -358,8 +356,9 @@ Useful for rewriting outgoing responses and other post-processing tasks.
 Emitted right before the L</"before_dispatch"> hook and wraps around the whole
 dispatch process, so you have to manually forward to the next hook if you want
 to continue the chain. Default exception handling with
-L<Mojolicious::Controller/"render_exception"> is the first hook in the chain
-and a call to L</"dispatch"> the last, yours will be in between.
+L<Mojolicious::Plugin::DefaultHelpers/"reply-E<gt>exception"> is the first
+hook in the chain and a call to L</"dispatch"> the last, yours will be in
+between.
 
   $app->hook(around_dispatch => sub {
     my ($next, $c) = @_;
@@ -458,7 +457,7 @@ startup method to define the url endpoints for your application.
   $r->post('/baz')->to('test#baz');
 
   # Add another namespace to load controllers from
-  push @{$app->routes->namespaces}, 'MyApp::Controller';
+  push @{$app->routes->namespaces}, 'MyApp::MyController';
 
 =head2 secrets
 
@@ -522,6 +521,12 @@ L<Mojolicious::Types> object.
 
 Validate parameters, defaults to a L<Mojolicious::Validator> object.
 
+  # Add validation check
+  $app->validator->add_check(foo => sub {
+    my ($validation, $name, $value) = @_;
+    return $value ne 'foo';
+  });
+
 =head1 METHODS
 
 L<Mojolicious> inherits all methods from L<Mojo> and implements the following
@@ -536,7 +541,7 @@ new ones.
 Build default controller object with L</"controller_class">.
 
   # Render template from application
-  my $foo = $app->build_controller->render(template => 'foo', partial => 1);
+  my $foo = $app->build_controller->render_to_string(template => 'foo');
 
 =head2 build_tx
 
@@ -556,6 +561,9 @@ request.
 
   # Remove value
   my $foo = delete $app->defaults->{foo};
+
+  # Assign multiple values at once
+  $app->defaults(foo => 'test', bar => 23);
 
 =head2 dispatch
 
@@ -583,9 +591,13 @@ and the application object, as well as a function in C<ep> templates.
   # Helper
   $app->helper(cache => sub { state $cache = {} });
 
-  # Controller/Application
-  $self->cache->{foo} = 'bar';
-  my $result = $self->cache->{foo};
+  # Application
+  $app->cache->{foo} = 'bar';
+  my $result = $app->cache->{foo};
+
+  # Controller
+  $c->cache->{foo} = 'bar';
+  my $result = $c->cache->{foo};
 
   # Template
   % cache->{foo} = 'bar';
@@ -636,9 +648,11 @@ L<Mojolicious> distribution see L<Mojolicious::Plugins/"PLUGINS">.
   $app->start(@ARGV);
 
 Start the command line interface for your application, for a full list of
-commands available by default see L<Mojolicious::Commands/"COMMANDS">.
+commands available by default see L<Mojolicious::Commands/"COMMANDS">. Note
+that the options C<-h>/C<--help>, C<--home> and C<-m>/C<--mode>, which are
+shared by all commands, will be parsed from C<@ARGV> during compile time.
 
-  # Always start daemon and ignore @ARGV
+  # Always start daemon
   $app->start('daemon', '-l', 'http://*:8080');
 
 =head2 startup
@@ -662,7 +676,11 @@ Note that application helpers are always called with a new default controller
 object, so they can't depend on or change controller state, which includes
 request, response and stash.
 
-  $app->log->debug($app->dumper({foo => 'bar'}));
+  # Call helper
+  say $app->dumper({foo => 'bar'});
+
+  # Longer version
+  say $app->build_controller->helpers->dumper({foo => 'bar'});
 
 =head1 BUNDLED FILES
 
@@ -671,7 +689,7 @@ that have been bundled for internal use.
 
 =head2 Mojolicious Artwork
 
-  Copyright (C) 2010-2014, Sebastian Riedel.
+  Copyright (C) 2010-2015, Sebastian Riedel.
 
 Licensed under the CC-SA License, Version 4.0
 L<http://creativecommons.org/licenses/by-sa/4.0>.
@@ -693,6 +711,8 @@ L<http://www.apache.org/licenses/LICENSE-2.0>.
 
 Every major release of L<Mojolicious> has a code name, these are the ones that
 have been used in the past.
+
+5.0, C<Tiger Face> (u1F42F)
 
 4.0, C<Top Hat> (u1F3A9)
 
@@ -732,6 +752,8 @@ Current members of the core team in alphabetical order:
 Abhijit Menon-Sen, C<ams@cpan.org>
 
 Glen Hinkle, C<tempire@cpan.org>
+
+Jan Henning Thorsen, C<jhthorsen@cpan.org>
 
 Joel Berger, C<jberger@cpan.org>
 
@@ -778,6 +800,8 @@ Ashley Dev
 Ask Bjoern Hansen
 
 Audrey Tang
+
+Ben Tyler
 
 Ben van Staveren
 
@@ -833,17 +857,19 @@ Gisle Aas
 
 Graham Barr
 
+Graham Knop
+
 Henry Tang
 
 Hideki Yamamura
+
+Hiroki Toyokawa
 
 Ian Goodacre
 
 Ilya Chesnokov
 
 James Duncan
-
-Jan Henning Thorsen
 
 Jan Jona Javorsek
 
@@ -867,6 +893,8 @@ Kevin Old
 
 Kitamura Akatsuki
 
+Klaus S. Madsen
+
 Lars Balker Rasmussen
 
 Leon Brocard
@@ -874,6 +902,10 @@ Leon Brocard
 Magnus Holm
 
 Maik Fischer
+
+Mark Fowler
+
+Mark Grimes
 
 Mark Stosberg
 
@@ -919,11 +951,15 @@ Peter Edwards
 
 Pierre-Yves Ritschard
 
+Piotr Roszatycki
+
 Quentin Carbonneaux
 
 Rafal Pocztarski
 
 Randal Schwartz
+
+Rick Delaney
 
 Robert Hicks
 
@@ -949,11 +985,15 @@ Skye Shaw
 
 Stanis Trendelenburg
 
+Steffen Ullrich
+
 Stephane Este-Gracias
 
 Tatsuhiko Miyagawa
 
 Terrence Brannon
+
+Tianon Gravi
 
 Tomas Znamenacek
 
@@ -981,13 +1021,14 @@ Zak B. Elep
 
 =head1 COPYRIGHT AND LICENSE
 
-Copyright (C) 2008-2014, Sebastian Riedel.
+Copyright (C) 2008-2015, Sebastian Riedel.
 
 This program is free software, you can redistribute it and/or modify it under
 the terms of the Artistic License version 2.0.
 
 =head1 SEE ALSO
 
-L<Mojolicious::Guides>, L<http://mojolicio.us>.
+L<https://github.com/kraih/mojo>, L<Mojolicious::Guides>,
+L<http://mojolicio.us>.
 
 =cut

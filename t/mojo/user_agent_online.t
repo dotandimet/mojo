@@ -10,8 +10,6 @@ use Mojo::IOLoop::Server;
 
 plan skip_all => 'set TEST_ONLINE to enable this test (developer only!)'
   unless $ENV{TEST_ONLINE};
-plan skip_all => 'IO::Socket::IP 0.20 required for this test!'
-  unless Mojo::IOLoop::Server::IPV6;
 plan skip_all => 'IO::Socket::SSL 1.84 required for this test!'
   unless Mojo::IOLoop::Server::TLS;
 
@@ -23,8 +21,8 @@ use Mojolicious::Lite;
 use ojo;
 
 get '/remote_address' => sub {
-  my $self = shift;
-  $self->render(text => $self->tx->remote_address);
+  my $c = shift;
+  $c->render(text => $c->tx->remote_address);
 };
 
 # Make sure user agents dont taint the ioloop
@@ -55,7 +53,9 @@ my $sock = IO::Socket::INET->new(PeerAddr => 'mojolicio.us', PeerPort => 80);
 my $address = $sock->sockhost;
 isnt $address, '127.0.0.1', 'different address';
 $ua->local_address('127.0.0.1')->max_connections(0);
-is $ua->get('/remote_address')->res->body, '127.0.0.1', 'right address';
+my $tx = $ua->get('/remote_address');
+ok !$ua->ioloop->stream($tx->connection), 'connection is not active';
+is $tx->res->body, '127.0.0.1', 'right address';
 $ua->local_address($address);
 is $ua->get('/remote_address')->res->body, $address, 'right address';
 
@@ -63,8 +63,8 @@ is $ua->get('/remote_address')->res->body, $address, 'right address';
 $ua = Mojo::UserAgent->new;
 
 # Connection refused
-my $port = Mojo::IOLoop->generate_port;
-my $tx = $ua->build_tx(GET => "http://localhost:$port");
+my $port = Mojo::IOLoop::Server->generate_port;
+$tx = $ua->build_tx(GET => "http://127.0.0.1:$port");
 $ua->start($tx);
 ok $tx->is_finished, 'transaction is finished';
 ok $tx->error,       'has error';
@@ -85,7 +85,7 @@ ok $tx->error,       'has error';
 $tx = $ua->build_tx(GET => 'http://cdeabcdeffoobarnonexisting.com');
 $ua->start($tx);
 ok $tx->is_finished, 'transaction is finished';
-like $tx->error, qr/^Couldn't connect/, 'right error';
+ok $tx->error,       'has error';
 
 # Fresh user agent again
 $ua = Mojo::UserAgent->new;
@@ -108,15 +108,15 @@ ok $kept_alive, 'connection was kept alive';
 my @kept_alive;
 $ua->get(
   'http://mojolicio.us' => sub {
-    my ($self, $tx) = @_;
+    my ($ua, $tx) = @_;
     push @kept_alive, $tx->kept_alive;
-    $self->get(
+    $ua->get(
       'http://mojolicio.us' => sub {
-        my ($self, $tx) = @_;
+        my ($ua, $tx) = @_;
         push @kept_alive, $tx->kept_alive;
-        $self->get(
+        $ua->get(
           'http://mojolicio.us' => sub {
-            my ($self, $tx) = @_;
+            my ($ua, $tx) = @_;
             push @kept_alive, $tx->kept_alive;
             Mojo::IOLoop->singleton->stop;
           }
@@ -160,7 +160,7 @@ is $tx->res->code,   301,                   'right status';
 $tx = $ua->get('http://google.com');
 is $tx->req->method, 'GET',               'right method';
 is $tx->req->url,    'http://google.com', 'right url';
-is $tx->res->code,   301,                 'right status';
+is $tx->res->code,   302,                 'right status';
 
 # Simple keep-alive requests
 $tx = $ua->get('http://www.wikipedia.org');
@@ -232,8 +232,9 @@ is $tx->res->code,   200,             'right status';
 ok $tx->kept_alive,    'connection was kept alive';
 ok $tx->local_address, 'has local address';
 ok $tx->local_port > 0, 'has local port';
-ok $tx->remote_address, 'has local address';
-ok $tx->remote_port > 0, 'has local port';
+ok $tx->original_remote_address, 'has original remote address';
+ok $tx->remote_address,          'has remote address';
+ok $tx->remote_port > 0, 'has remote port';
 
 # Simple request with redirect
 $ua->max_redirects(3);
@@ -253,12 +254,12 @@ is $tx->redirects->[-1]->res->code, 301, 'right status';
 # Connect timeout (non-routable address)
 $tx = $ua->connect_timeout(0.5)->get('192.0.2.1');
 ok $tx->is_finished, 'transaction is finished';
-is $tx->error, 'Connect timeout', 'right error';
+is $tx->error->{message}, 'Connect timeout', 'right error';
 $ua->connect_timeout(3);
 
 # Request timeout (non-routable address)
 $tx = $ua->request_timeout(0.5)->get('192.0.2.1');
 ok $tx->is_finished, 'transaction is finished';
-is $tx->error, 'Request timeout', 'right error';
+is $tx->error->{message}, 'Request timeout', 'right error';
 
 done_testing();

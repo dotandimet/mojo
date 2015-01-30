@@ -1,9 +1,6 @@
 use Mojo::Base -strict;
 
-BEGIN {
-  $ENV{MOJO_NO_IPV6} = 1;
-  $ENV{MOJO_REACTOR} = 'Mojo::Reactor::Poll';
-}
+BEGIN { $ENV{MOJO_REACTOR} = 'Mojo::Reactor::Poll' }
 
 use Test::More;
 use Mojo::IOLoop;
@@ -30,9 +27,10 @@ is ref $loop->reactor, 'MyReactor', 'right class';
 my $err;
 Mojo::IOLoop->next_tick(
   sub {
-    eval { Mojo::IOLoop->start };
+    my $loop = shift;
+    eval { $loop->start };
     $err = $@;
-    Mojo::IOLoop->stop;
+    $loop->stop;
   }
 );
 Mojo::IOLoop->start;
@@ -76,22 +74,34 @@ $loop->remove($id);
 ok $count > 1, 'more than one recurring event';
 ok $count < 10, 'less than ten recurring events';
 
-# Handle
-my $port = Mojo::IOLoop->generate_port;
+# Handle and reset
 my ($handle, $handle2);
 $id = Mojo::IOLoop->server(
-  (address => '127.0.0.1', port => $port) => sub {
+  (address => '127.0.0.1') => sub {
     my ($loop, $stream) = @_;
     $handle = $stream->handle;
     Mojo::IOLoop->stop;
   }
 );
+my $port = Mojo::IOLoop->acceptor($id)->port;
 Mojo::IOLoop->acceptor($id)->on(accept => sub { $handle2 = pop });
 $id2
-  = Mojo::IOLoop->client((address => 'localhost', port => $port) => sub { });
+  = Mojo::IOLoop->client((address => '127.0.0.1', port => $port) => sub { });
 Mojo::IOLoop->start;
-Mojo::IOLoop->remove($id);
-Mojo::IOLoop->remove($id2);
+$count = 0;
+Mojo::IOLoop->recurring(10 => sub { $timer++ });
+my $running;
+Mojo::IOLoop->next_tick(
+  sub {
+    Mojo::IOLoop->reset;
+    $running = Mojo::IOLoop->is_running;
+  }
+);
+Mojo::IOLoop->start;
+ok !$running, 'not running';
+is $count, 0, 'no recurring events';
+ok !Mojo::IOLoop->acceptor($id), 'acceptor has been removed';
+ok !Mojo::IOLoop->stream($id2),  'stream has been removed';
 is $handle, $handle2, 'handles are equal';
 isa_ok $handle, 'IO::Socket', 'right reference';
 
@@ -99,14 +109,14 @@ isa_ok $handle, 'IO::Socket', 'right reference';
 my $time = time;
 Mojo::IOLoop->start;
 Mojo::IOLoop->one_tick;
+Mojo::IOLoop->reset;
 ok time < ($time + 10), 'stopped automatically';
 
 # Stream
-$port = Mojo::IOLoop->generate_port;
 my $buffer = '';
-Mojo::IOLoop->server(
-  (address => '127.0.0.1', port => $port) => sub {
-    my ($loop, $stream, $id) = @_;
+$id = Mojo::IOLoop->server(
+  (address => '127.0.0.1') => sub {
+    my ($loop, $stream) = @_;
     $buffer .= 'accepted';
     $stream->on(
       read => sub {
@@ -118,17 +128,20 @@ Mojo::IOLoop->server(
     );
   }
 );
+$port = Mojo::IOLoop->acceptor($id)->port;
 my $delay = Mojo::IOLoop->delay;
-my $end   = $delay->begin(0);
+my $end   = $delay->begin;
+$handle = undef;
 Mojo::IOLoop->client(
   {port => $port} => sub {
     my ($loop, $err, $stream) = @_;
-    $end->($stream);
+    $handle = $stream->steal_handle;
+    $end->();
     $stream->on(close => sub { $buffer .= 'should not happen' });
     $stream->on(error => sub { $buffer .= 'should not happen either' });
   }
 );
-$handle = $delay->wait->steal_handle;
+$delay->wait;
 my $stream = Mojo::IOLoop::Stream->new($handle);
 is $stream->timeout, 15, 'right default';
 is $stream->timeout(16)->timeout, 16, 'right timeout';
@@ -145,8 +158,8 @@ ok !Mojo::IOLoop->stream($id), 'stream does not exist anymore';
 is $buffer, 'acceptedhelloworld', 'right result';
 
 # Removed listen socket
-$port = Mojo::IOLoop->generate_port;
-$id = $loop->server({address => '127.0.0.1', port => $port} => sub { });
+$id = $loop->server({address => '127.0.0.1'} => sub { });
+$port = $loop->acceptor($id)->port;
 my $connected;
 $loop->client(
   {port => $port} => sub {
@@ -167,14 +180,14 @@ ok !$loop->acceptor($id), 'acceptor has been removed';
 # Removed connection (with delay)
 my $removed;
 $delay = Mojo::IOLoop->delay(sub { $removed++ });
-$port  = Mojo::IOLoop->generate_port;
 $end   = $delay->begin;
-Mojo::IOLoop->server(
-  (address => '127.0.0.1', port => $port) => sub {
+$id    = Mojo::IOLoop->server(
+  (address => '127.0.0.1') => sub {
     my ($loop, $stream) = @_;
     $stream->on(close => $end);
   }
 );
+$port = Mojo::IOLoop->acceptor($id)->port;
 my $end2 = $delay->begin;
 $id = Mojo::IOLoop->client(
   (port => $port) => sub {
@@ -187,10 +200,9 @@ $delay->wait;
 is $removed, 1, 'connection has been removed';
 
 # Stream throttling
-$port = Mojo::IOLoop->generate_port;
 my ($client, $server, $client_after, $server_before, $server_after);
-Mojo::IOLoop->server(
-  {address => '127.0.0.1', port => $port} => sub {
+$id = Mojo::IOLoop->server(
+  {address => '127.0.0.1'} => sub {
     my ($loop, $stream) = @_;
     $stream->timeout(0)->on(
       read => sub {
@@ -215,6 +227,7 @@ Mojo::IOLoop->server(
     );
   }
 );
+$port = Mojo::IOLoop->acceptor($id)->port;
 Mojo::IOLoop->client(
   {port => $port} => sub {
     my ($loop, $err, $stream) = @_;
@@ -233,7 +246,8 @@ is $client, 'works!', 'full message has been written';
 # Graceful shutdown (max_connections)
 $err = '';
 $loop = Mojo::IOLoop->new(max_connections => 0);
-$loop->remove($loop->client({port => $loop->generate_port} => sub { }));
+$loop->remove(
+  $loop->client({port => Mojo::IOLoop::Server->generate_port} => sub { }));
 $loop->timer(3 => sub { shift->stop; $err = 'failed' });
 $loop->start;
 ok !$err, 'no error';
@@ -242,9 +256,8 @@ is $loop->max_connections, 0, 'right value';
 # Graceful shutdown (max_accepts)
 $err  = '';
 $loop = Mojo::IOLoop->new(max_accepts => 1);
-$port = $loop->generate_port;
-$loop->server(
-  {address => '127.0.0.1', port => $port} => sub { shift; shift->close });
+$id   = $loop->server({address => '127.0.0.1'} => sub { shift; shift->close });
+$port = $loop->acceptor($id)->port;
 $loop->client({port => $port} => sub { });
 $loop->timer(3 => sub { shift->stop; $err = 'failed' });
 $loop->start;

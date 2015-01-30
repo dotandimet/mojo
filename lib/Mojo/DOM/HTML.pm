@@ -4,8 +4,7 @@ use Mojo::Base -base;
 use Mojo::Util qw(html_unescape xml_escape);
 use Scalar::Util 'weaken';
 
-has 'xml';
-has tree => sub { ['root'] };
+has [qw(tree xml)];
 
 my $ATTR_RE = qr/
   ([^<>=\s\/]+|\/)   # Key
@@ -16,36 +15,33 @@ my $ATTR_RE = qr/
     |
       '([^']*?)'     # Apostrophes
     |
-      ([^>\s\/]*)    # Unquoted
+      ([^>\s]*)      # Unquoted
     )
   )?
   \s*
 /x;
-my $END_RE   = qr!^\s*/\s*(.+)!;
 my $TOKEN_RE = qr/
-  ([^<]+)?                                          # Text
+  ([^<]+)?                                            # Text
   (?:
-    <\?(.*?)\?>                                     # Processing Instruction
-  |
-    <!--(.*?)--\s*>                                 # Comment
-  |
-    <!\[CDATA\[(.*?)\]\]>                           # CDATA
-  |
-    <!DOCTYPE(
-      \s+\w+
-      (?:(?:\s+\w+)?(?:\s+(?:"[^"]*"|'[^']*'))+)?   # External ID
-      (?:\s+\[.+?\])?                               # Int Subset
-      \s*
+    <(?:
+      !(?:
+        DOCTYPE(
+        \s+\w+                                        # Doctype
+        (?:(?:\s+\w+)?(?:\s+(?:"[^"]*"|'[^']*'))+)?   # External ID
+        (?:\s+\[.+?\])?                               # Int Subset
+        \s*)
+      |
+        --(.*?)--\s*                                  # Comment
+      |
+        \[CDATA\[(.*?)\]\]                            # CDATA
+      )
+    |
+      \?(.*?)\?                                       # Processing Instruction
+    |
+      \s*([^<>\s]+\s*(?:(?:$ATTR_RE){0,32766})*+)     # Tag
     )>
   |
-    <(
-      \s*
-      [^<>\s]+                                      # Tag
-      \s*
-      (?:$ATTR_RE)*                                 # Attributes
-    )>
-  |
-    (<)                                             # Runaway "<"
+    (<)                                               # Runaway "<"
   )??
 /xis;
 
@@ -56,23 +52,24 @@ my %RAW = map { $_ => 1 } qw(script style);
 my %RCDATA = map { $_ => 1 } qw(title textarea);
 
 # HTML elements with optional end tags
-my %END = (
-  body => ['head'],
-  dd   => [qw(dt dd)],
-  dt   => [qw(dt dd)],
-  rp   => [qw(rt rp)],
-  rt   => [qw(rt rp)]
-);
-$END{$_} = [$_] for qw(optgroup option);
+my %END = (body => 'head', optgroup => 'optgroup', option => 'option');
 
 # HTML elements that break paragraphs
-map { $END{$_} = ['p'] } (
+map { $END{$_} = 'p' } (
   qw(address article aside blockquote dir div dl fieldset footer form h1 h2),
   qw(h3 h4 h5 h6 header hr main menu nav ol p pre section table ul)
 );
 
 # HTML table elements with optional end tags
 my %TABLE = map { $_ => 1 } qw(colgroup tbody td tfoot th thead tr);
+
+# HTML elements with optional end tags and scoping rules
+my %CLOSE
+  = (li => [{li => 1}, {ul => 1, ol => 1}], tr => [{tr => 1}, {table => 1}]);
+$CLOSE{$_} = [\%TABLE, {table => 1}] for qw(colgroup tbody tfoot thead);
+$CLOSE{$_} = [{dd => 1, dt => 1}, {dl    => 1}] for qw(dd dt);
+$CLOSE{$_} = [{rp => 1, rt => 1}, {ruby  => 1}] for qw(rp rt);
+$CLOSE{$_} = [{th => 1, td => 1}, {table => 1}] for qw(td th);
 
 # HTML elements without end tags
 my %EMPTY = map { $_ => 1 } (
@@ -84,9 +81,9 @@ my %EMPTY = map { $_ => 1 } (
 my @PHRASING = (
   qw(a abbr area audio b bdi bdo br button canvas cite code data datalist),
   qw(del dfn em embed i iframe img input ins kbd keygen label link map mark),
-  qw(math meta meter noscript object output progress q ruby s samp script),
-  qw(select small span strong sub sup svg template textarea time u var video),
-  qw(wbr)
+  qw(math meta meter noscript object output picture progress q ruby s samp),
+  qw(script select small span strong sub sup svg template textarea time u),
+  qw(var video wbr)
 );
 my @OBSOLETE = qw(acronym applet basefont big font strike tt);
 my %PHRASING = map { $_ => 1 } @OBSOLETE, @PHRASING;
@@ -103,12 +100,12 @@ my %BLOCK = map { $_ => 1 } (
 );
 
 sub parse {
-  my ($self, $html) = @_;
+  my ($self, $html) = (shift, "$_[0]");
 
   my $xml = $self->xml;
   my $current = my $tree = ['root'];
-  while ($html =~ m/\G$TOKEN_RE/gcs) {
-    my ($text, $pi, $comment, $cdata, $doctype, $tag, $runaway)
+  while ($html =~ m/\G$TOKEN_RE/gcso) {
+    my ($text, $doctype, $comment, $cdata, $pi, $tag, $runaway)
       = ($1, $2, $3, $4, $5, $6, $11);
 
     # Text (and runaway "<")
@@ -119,16 +116,16 @@ sub parse {
     if (defined $tag) {
 
       # End
-      if ($tag =~ $END_RE) { _end($xml ? $1 : lc($1), $xml, \$current) }
+      if ($tag =~ /^\/\s*(\S+)/) { _end($xml ? $1 : lc $1, $xml, \$current) }
 
       # Start
-      elsif ($tag =~ m!([^\s/]+)([\s\S]*)!) {
-        my ($start, $attr) = ($xml ? $1 : lc($1), $2);
+      elsif ($tag =~ m!^([^\s/]+)([\s\S]*)!) {
+        my ($start, $attr) = ($xml ? $1 : lc $1, $2);
 
         # Attributes
         my (%attrs, $closing);
-        while ($attr =~ /$ATTR_RE/g) {
-          my ($key, $value) = ($xml ? $1 : lc($1), $2 // $3 // $4);
+        while ($attr =~ /$ATTR_RE/go) {
+          my ($key, $value) = ($xml ? $1 : lc $1, $2 // $3 // $4);
 
           # Empty tag
           ++$closing and next if $key eq '/';
@@ -146,7 +143,7 @@ sub parse {
 
         # Raw text elements
         next if $xml || !$RAW{$start} && !$RCDATA{$start};
-        next unless $html =~ m!\G(.*?)<\s*/\s*$start\s*>!gcsi;
+        next unless $html =~ m!\G(.*?)<\s*/\s*\Q$start\E\s*>!gcsi;
         _node($current, 'raw', $RCDATA{$start} ? html_unescape $1 : $1);
         _end($start, 0, \$current);
       }
@@ -173,17 +170,6 @@ sub parse {
 
 sub render { _render($_[0]->tree, $_[0]->xml) }
 
-sub _close {
-  my ($current, $allowed, $scope) = @_;
-
-  # Close allowed parent elements in scope
-  my $parent = $$current;
-  while ($parent->[0] ne 'root' && !$scope->{$parent->[1]}) {
-    _end($parent->[1], 0, $current) if $allowed->{$parent->[1]};
-    $parent = $parent->[3];
-  }
-}
-
 sub _end {
   my ($end, $xml, $current) = @_;
 
@@ -205,16 +191,15 @@ sub _end {
 
 sub _node {
   my ($current, $type, $content) = @_;
-  my $new = [$type, $content, $current];
+  push @$current, my $new = [$type, $content, $current];
   weaken $new->[2];
-  push @$current, $new;
 }
 
 sub _render {
   my ($tree, $xml) = @_;
 
   # Text (escaped)
-  my $type = $tree->[0];
+  return '' unless my $type = $tree->[0];
   return xml_escape $tree->[1] if $type eq 'text';
 
   # Raw text
@@ -232,42 +217,30 @@ sub _render {
   # Processing instruction
   return '<?' . $tree->[1] . '?>' if $type eq 'pi';
 
+  # Root
+  return join '', map { _render($_, $xml) } @$tree[1 .. $#$tree]
+    if $type eq 'root';
+
   # Start tag
-  my $result = '';
-  if ($type eq 'tag') {
+  my $tag    = $tree->[1];
+  my $result = "<$tag";
 
-    # Open tag
-    my $tag = $tree->[1];
-    $result .= "<$tag";
-
-    # Attributes
-    my @attrs;
-    for my $key (sort keys %{$tree->[2]}) {
-
-      # No value
-      push @attrs, $key and next unless defined(my $value = $tree->[2]{$key});
-
-      # Key and value
-      push @attrs, qq{$key="} . xml_escape($value) . '"';
-    }
-    $result .= join ' ', '', @attrs if @attrs;
-
-    # Element without end tag
-    return $xml ? "$result />" : $EMPTY{$tag} ? "$result>" : "$result></$tag>"
-      unless $tree->[4];
-
-    # Close tag
-    $result .= '>';
+  # Attributes
+  for my $key (sort keys %{$tree->[2]}) {
+    $result .= " $key" and next unless defined(my $value = $tree->[2]{$key});
+    $result .= " $key" . '="' . xml_escape($value) . '"';
   }
 
-  # Render whole tree
-  $result .= _render($tree->[$_], $xml)
-    for ($type eq 'root' ? 1 : 4) .. $#$tree;
+  # No children
+  return $xml ? "$result />" : $EMPTY{$tag} ? "$result>" : "$result></$tag>"
+    unless $tree->[4];
+
+  # Children
+  no warnings 'recursion';
+  $result .= '>' . join '', map { _render($_, $xml) } @$tree[4 .. $#$tree];
 
   # End tag
-  $result .= '</' . $tree->[1] . '>' if $type eq 'tag';
-
-  return $result;
+  return "$result</$tag>";
 }
 
 sub _start {
@@ -275,29 +248,23 @@ sub _start {
 
   # Autoclose optional HTML elements
   if (!$xml && $$current->[0] ne 'root') {
-    if (my $end = $END{$start}) { _end($_, 0, $current) for @$end }
+    if (my $end = $END{$start}) { _end($end, 0, $current) }
 
-    # "li"
-    elsif ($start eq 'li') { _close($current, {li => 1}, {ul => 1, ol => 1}) }
+    elsif (my $close = $CLOSE{$start}) {
+      my ($allowed, $scope) = @$close;
 
-    # "colgroup", "thead", "tbody" and "tfoot"
-    elsif ($start eq 'colgroup' || $start =~ /^t(?:head|body|foot)$/) {
-      _close($current, \%TABLE, {table => 1});
-    }
-
-    # "tr"
-    elsif ($start eq 'tr') { _close($current, {tr => 1}, {table => 1}) }
-
-    # "th" and "td"
-    elsif ($start eq 'th' || $start eq 'td') {
-      _close($current, {$_ => 1}, {table => 1}) for qw(th td);
+      # Close allowed parent elements in scope
+      my $parent = $$current;
+      while ($parent->[0] ne 'root' && !$scope->{$parent->[1]}) {
+        _end($parent->[1], 0, $current) if $allowed->{$parent->[1]};
+        $parent = $parent->[3];
+      }
     }
   }
 
   # New tag
-  my $new = ['tag', $start, $attrs, $$current];
+  push @$$current, my $new = ['tag', $start, $attrs, $$current];
   weaken $new->[3];
-  push @$$current, $new;
   $$current = $new;
 }
 
@@ -315,13 +282,13 @@ Mojo::DOM::HTML - HTML/XML engine
 
   # Turn HTML into DOM tree
   my $html = Mojo::DOM::HTML->new;
-  $html->parse('<div><p id="a">A</p><p id="b">B</p></div>');
+  $html->parse('<div><p id="a">Test</p><p id="b">123</p></div>');
   my $tree = $html->tree;
 
 =head1 DESCRIPTION
 
 L<Mojo::DOM::HTML> is the HTML/XML engine used by L<Mojo::DOM> and based on
-the L<HTML Living Standard|http://www.whatwg.org/html> as well as the
+the L<HTML Living Standard|https://html.spec.whatwg.org> as well as the
 L<Extensible Markup Language (XML) 1.0|http://www.w3.org/TR/xml/>.
 
 =head1 ATTRIBUTES
@@ -341,7 +308,7 @@ carefully since it is very dynamic.
   my $bool = $html->xml;
   $html    = $html->xml($bool);
 
-Disable HTML semantics in parser and activate case sensitivity, defaults to
+Disable HTML semantics in parser and activate case-sensitivity, defaults to
 auto detection based on processing instructions.
 
 =head1 METHODS

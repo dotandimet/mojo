@@ -4,14 +4,13 @@ use Mojo::Base 'Mojolicious::Command';
 use Getopt::Long qw(GetOptionsFromArray :config no_auto_abbrev no_ignore_case);
 use Mojo::Server::CGI;
 
-has description => 'Start application with CGI.';
+has description => 'Start application with CGI';
 has usage => sub { shift->extract_usage };
 
 sub run {
   my ($self, @args) = @_;
-  my $cgi = Mojo::Server::CGI->new(app => $self->app);
-  GetOptionsFromArray \@args, nph => sub { $cgi->nph(1) };
-  $cgi->run;
+  GetOptionsFromArray \@args, nph => \(my $nph = 0);
+  Mojo::Server::CGI->new(app => $self->app, nph => $nph)->run;
 }
 
 1;
@@ -27,7 +26,7 @@ Mojolicious::Command::cgi - CGI command
   Usage: APPLICATION cgi [OPTIONS]
 
   Options:
-    --nph   Enable non-parsed-header mode.
+    --nph   Enable non-parsed-header mode
 
 =head1 DESCRIPTION
 
@@ -48,14 +47,14 @@ L<Mojolicious::Command> and implements the following new ones.
 =head2 description
 
   my $description = $cgi->description;
-  $cgi            = $cgi->description('Foo!');
+  $cgi            = $cgi->description('Foo');
 
 Short description of this command, used for the command list.
 
 =head2 usage
 
   my $usage = $cgi->usage;
-  $cgi      = $cgi->usage('Foo!');
+  $cgi      = $cgi->usage('Foo');
 
 Usage information for this command, used for the help screen.
 

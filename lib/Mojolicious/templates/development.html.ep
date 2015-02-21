@@ -6,8 +6,7 @@
     <meta http-equiv="Pragma" content="no-cache">
     <meta http-equiv="Expires" content="-1">
     %= javascript '/mojo/jquery/jquery.js'
-    %= javascript '/mojo/prettify/run_prettify.js'
-    %= stylesheet '/mojo/prettify/prettify-mojo-dark.css'
+    %= stylesheet '/mojo/prism/prism-dark.css'
     <style>
       a img { border: 0 }
       body {
@@ -327,5 +326,6 @@
         %= image '/mojo/logo-black.png', alt => 'Mojolicious logo'
       % end
     </div>
+    %= javascript '/mojo/prism/prism.js'
   </body>
 </html>

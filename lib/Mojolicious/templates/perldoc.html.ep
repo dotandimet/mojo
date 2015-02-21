@@ -2,8 +2,7 @@
 <html>
   <head>
     <title><%= $title %></title>
-    %= javascript '/mojo/prettify/run_prettify.js'
-    %= stylesheet '/mojo/prettify/prettify-mojo-light.css'
+    %= stylesheet '/mojo/prism/prism.css'
     <style>
       a { color: inherit }
       a:hover { color: #2a2a2a }
@@ -117,5 +116,6 @@
         %= image '/mojo/logo-black.png', alt => 'Mojolicious logo'
       % end
     </div>
+    %= javascript '/mojo/prism/prism.js'
   </body>
 </html>

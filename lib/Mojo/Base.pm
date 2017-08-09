@@ -61,6 +61,10 @@ sub attr {
   }
 }
 
+sub can_roles {
+  return !!(eval 'require Role::Tiny' && $Role::Tiny::VERSION >= 2.000003);
+}
+
 sub import {
   my $class = shift;
   return unless my $flag = shift;
@@ -99,6 +103,16 @@ sub tap {
   my ($self, $cb) = (shift, shift);
   $_->$cb(@_) for $self;
   return $self;
+}
+
+sub with_roles {
+  if ($_[0]->can_roles()) {
+    Carp::croak "class and roles must be package names" if !!grep { ref $_ } @_;
+    return Role::Tiny->create_class_with_roles(@_);
+  }
+  else {
+    Carp::croak "Role::Tiny 2.000005 is required for with_roles method";
+  }
 }
 
 1;
@@ -210,6 +224,13 @@ executed at accessor read time if there's no set value, and gets passed the
 current instance of the object as first argument. Accessors can be chained, that
 means they return their invocant when they are called with an argument.
 
+=head2 can_roles
+
+  my $roles_ok = Mojo::Base->can_roles()
+
+True if L<Role::Tiny> 2.000005+ is installed and roles are supported in Mojo::Base
+derived classes.
+
 =head2 new
 
   my $object = SubClass->new;
@@ -237,6 +258,15 @@ spliced or tapped into) a chained set of object method calls.
 
   # Inject side effects into a method chain
   $object->foo('A')->tap(sub { say $_->foo })->foo('B');
+
+=head2 with_roles
+
+  my $class = Some::BaseClass->with_roles(qw(MyApp::Role1 MyApp::Role2));
+  my $object = $class->new();
+
+Create a new class based on base, with the roles composed into it in order,
+using L<Role::Tiny>'s C<create_class_with_roles> method. Roles must be
+fully-qualified package names.
 
 =head1 SEE ALSO
 

@@ -62,7 +62,7 @@ sub attr {
 }
 
 sub can_roles {
-  return !!(eval 'require Role::Tiny' && $Role::Tiny::VERSION >= 2.000003);
+  return !!(eval 'require Role::Tiny' && $Role::Tiny::VERSION >= 2.000005);
 }
 
 sub import {

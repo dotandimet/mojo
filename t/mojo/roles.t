@@ -1,34 +1,62 @@
 use Mojo::Base -strict;
+
 use Test::More;
 
-plan skip_all => "Role::Tiny required for roles" unless Mojo::Base->can_roles;
+use FindBin;
+use lib "$FindBin::Bin/lib";
 
-# First test derived from sri's comment here:
-# https://github.com/kraih/mojo/pull/1118#issuecomment-320930345
-# TODO: make this a subtest
+plan skip_all => 'Role::Tiny 2.000001+ required for this test!'
+  unless Mojo::Base->can_roles;
 
-package Test::Mojo::Role::Location;
-
+package Mojo::RoleTest::LOUD;
 use Role::Tiny;
-use Test::More; # for is()
 
-sub location_is {
-  my ($t, $value, $desc) = @_;
-  $desc ||= "Location: $value";
-  local $Test::Builder::Level = $Test::Builder::Level + 1;
-  return $t->success(is($t->tx->res->headers->location, $value, $desc));
+sub yell {'HEY!'}
+
+requires 'name';
+
+sub hello {
+  my ($self) = @_;
+  return $self->yell . ' ' . uc($self->name) . '!!!';
 }
 
-1;
+package Mojo::RoleTest::quiet;
+use Role::Tiny;
+
+requires 'name';
+
+sub whisper {
+    my ($self) = @_;
+    return 'psst, ' . lc($self->name);
+}
+
+package Mojo::RoleTest::Base;
+use Mojo::Base -base;
+
+has name => 'bob';
+
+sub hello {
+    my ($self) = shift;
+    return 'hello ' . $self->name;
+}
 
 package main;
 
-use Test::Mojo;
+my $obj = Mojo::RoleTest::Base->new(name => 'Ted');
+is($obj->name,  'Ted',       'attr works');
+is($obj->hello, 'hello Ted', 'class method');
 
-plan tests => 3;
+my $obj2 = Mojo::RoleTest::Base->with_roles('Mojo::RoleTest::LOUD')->new;
+is($obj2->hello, 'HEY! BOB!!!', 'method from role overrides base method');
+is($obj2->yell,  'HEY!',        'new method from role');
 
-my $t = Test::Mojo->with_roles('Test::Mojo::Role::Location')->new();
-$t->get_ok('http://mojolicio.us')
-  ->status_is(301)
-  ->location_is('http://mojolicious.org/')
-  ->or(sub { diag 'doh!' });
+my $obj3 = Mojo::RoleTest::Base
+            ->with_roles( 'Mojo::RoleTest::quiet',
+                          'Mojo::RoleTest::LOUD')
+            ->new(name => 'Joel');
+is($obj3->name,    'Joel',         'attr from base class');
+is($obj3->whisper, 'psst, joel',   'method from role1');
+is($obj3->hello,   'HEY! JOEL!!!', 'method override from role2');
+
+done_testing();
+

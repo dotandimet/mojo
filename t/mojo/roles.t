@@ -2,9 +2,6 @@ use Mojo::Base -strict;
 
 use Test::More;
 
-use FindBin;
-use lib "$FindBin::Bin/lib";
-
 plan skip_all => 'Role::Tiny 2.000001+ required for this test!'
   unless Mojo::Base->can_roles;
 

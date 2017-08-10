@@ -26,8 +26,8 @@ use Role::Tiny;
 requires 'name';
 
 sub whisper {
-    my ($self) = @_;
-    return 'psst, ' . lc($self->name);
+  my ($self) = @_;
+  return 'psst, ' . lc($self->name);
 }
 
 package Mojo::RoleTest::Base;
@@ -36,8 +36,8 @@ use Mojo::Base -base;
 has name => 'bob';
 
 sub hello {
-    my ($self) = shift;
-    return 'hello ' . $self->name;
+  my ($self) = shift;
+  return 'hello ' . $self->name;
 }
 
 package main;
@@ -50,10 +50,8 @@ my $obj2 = Mojo::RoleTest::Base->with_roles('Mojo::RoleTest::LOUD')->new;
 is($obj2->hello, 'HEY! BOB!!!', 'method from role overrides base method');
 is($obj2->yell,  'HEY!',        'new method from role');
 
-my $obj3 = Mojo::RoleTest::Base
-            ->with_roles( 'Mojo::RoleTest::quiet',
-                          'Mojo::RoleTest::LOUD')
-            ->new(name => 'Joel');
+my $obj3 = Mojo::RoleTest::Base->with_roles('Mojo::RoleTest::quiet',
+  'Mojo::RoleTest::LOUD')->new(name => 'Joel');
 is($obj3->name,    'Joel',         'attr from base class');
 is($obj3->whisper, 'psst, joel',   'method from role1');
 is($obj3->hello,   'HEY! JOEL!!!', 'method override from role2');

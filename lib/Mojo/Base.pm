@@ -65,7 +65,7 @@ sub attr {
   }
 }
 
-sub can_roles { ROLES }
+sub can_roles {ROLES}
 
 sub import {
   my $class = shift;
@@ -108,8 +108,8 @@ sub tap {
 }
 
 sub with_roles {
-    return Role::Tiny->create_class_with_roles(@_) if (ROLES);
-    Carp::croak "Role::Tiny 2.000001+ is required for with_roles method";
+  return Role::Tiny->create_class_with_roles(@_) if (ROLES);
+  Carp::croak "Role::Tiny 2.000001+ is required for with_roles method";
 }
 
 1;
@@ -262,8 +262,8 @@ spliced or tapped into) a chained set of object method calls.
   my $object = $NewClass->new();
 
 Create and return a new class that extends the given class with the
-list of roles, in order, using L<Role::Tiny>'s C<create_class_with_roles>
-method. Roles must be fully-qualified package names.
+list of roles composed in order, using L<Role::Tiny>'s method
+C<create_class_with_roles>.
 
 =head1 SEE ALSO
 

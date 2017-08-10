@@ -28,7 +28,7 @@ OPTIONAL
   IO::Socket::Socks 0.64+ ($socks)
   IO::Socket::SSL 1.94+   ($tls)
   Net::DNS::Native 0.15+  ($nnr)
-  Role::Tiny 2.000005+ ($roles)
+  Role::Tiny 2.000001+ ($roles)
 
 EOF
 

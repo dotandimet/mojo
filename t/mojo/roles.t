@@ -1,6 +1,7 @@
 use Mojo::Base -strict;
 
 BEGIN {
+# bail in a BEGIN block, so we can use Role::Tiny in inline classes below
   use Test::More;
 
   plan skip_all => 'Role::Tiny 2.000001+ required for this test!'

@@ -258,8 +258,8 @@ spliced or tapped into) a chained set of object method calls.
 
 =head2 with_roles
 
-  my $NewClass = Class->with_roles('Foo::Role1', 'Bar::Role2');
-  my $object = $NewClass->new();
+  my $new_class = Class->with_roles('Foo::Role1', 'Bar::Role2');
+  my $object = $new_class->new();
 
 Create and return a new class that extends the given class with the
 list of roles composed in order, using L<Role::Tiny>'s method

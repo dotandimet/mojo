@@ -17,7 +17,7 @@ my $NAME
 
 # Role support requires Role::Tiny 2.000001+
 use constant ROLES =>
-  !!(eval 'require Role::Tiny' && $Role::Tiny::VERSION >= 2.000001);
+  !!(eval { require Role::Tiny; Role::Tiny->VERSION('2.000001'); 1 });
 
 # Protect subclasses using AUTOLOAD
 sub DESTROY { }

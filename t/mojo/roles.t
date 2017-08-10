@@ -1,9 +1,11 @@
 use Mojo::Base -strict;
 
-use Test::More;
+BEGIN {
+  use Test::More;
 
-plan skip_all => 'Role::Tiny 2.000001+ required for this test!'
-  unless Mojo::Base->can_roles;
+  plan skip_all => 'Role::Tiny 2.000001+ required for this test!'
+    unless Mojo::Base->can_roles;
+}
 
 package Mojo::RoleTest::LOUD;
 use Role::Tiny;
